@@ -7,12 +7,12 @@
 
 #include <cassert>
 #include <cstdint>       // for int32_t
-#include <cstdio>        // for FILE, fprintf
 #include <cstring>       // for memcpy
 #include <cmath>         // for isnan
 #include <algorithm>     // for sort, any_of
 #include <array>
 #include <initializer_list>
+#include <ostream>
 #include <string>
 #include <vector>
 #include "atox.hpp"      // for simple_atoi, read_word
@@ -67,7 +67,7 @@ private:
 };
 
 
-struct Mtz {
+struct GEMMI_DLL Mtz {
   struct Dataset {
     int id;
     std::string project_name;
@@ -99,6 +99,16 @@ struct Mtz {
     bool is_integer() const {
       return type == 'H' || type == 'B' || type == 'Y' || type == 'I';
     }
+
+    const Column* get_next_column_if_type(char next_type) const {
+      if (idx + 1 < parent->columns.size()) {
+        const Column& next_col = parent->columns[idx + 1];
+        if (next_col.dataset_id == dataset_id && next_col.type == next_type)
+          return &next_col;
+      }
+      return nullptr;
+    }
+
     using iterator = StrideIter<float>;
     iterator begin() {
       assert(parent);
@@ -122,9 +132,10 @@ struct Mtz {
       ints[0] = 29 + 156;
       ints[1] = 29;
       ints[2] = 156;
-      floats[43] = 1.f; // batch scale
+      // COMBAT sets BSCALE=1, but Pointless sets it to 0.
+      //floats[43] = 1.f; // batch scale
     }
-    int number;
+    int number = 0;
     std::string title;
     std::vector<int> ints;
     std::vector<float> floats;
@@ -180,7 +191,8 @@ struct Mtz {
   std::string appended_text;
   std::vector<float> data;
 
-  FILE* warnings = nullptr;
+  // stream used for warnings when reading mtz file (and also in mtz2cif)
+  std::ostream* warnings = nullptr;
 
   explicit Mtz(bool with_base=false) {
     if (with_base)
@@ -272,6 +284,12 @@ struct Mtz {
         rmsd[i] = std::sqrt(rmsd[i] / n);
     }
     return UnitCell(avg[0], avg[1], avg[2], avg[3], avg[4], avg[5]);
+  }
+
+  void set_spacegroup(const SpaceGroup* new_sg) {
+    spacegroup = new_sg;
+    spacegroup_number = new_sg ? spacegroup->ccp4 : 0;
+    spacegroup_name = new_sg ? spacegroup->hm : "";
   }
 
   Dataset& last_dataset() {
@@ -461,7 +479,7 @@ struct Mtz {
 
   // Functions for reading MTZ headers and data.
 
-  void toggle_endiannes() {
+  void toggle_endianness() {
     same_byte_order = !same_byte_order;
     swap_eight_bytes(&header_offset);
   }
@@ -483,7 +501,7 @@ struct Mtz {
     // BE is denoted by 1 and LE by 4.
     // If we get a value different than 1 and 4 we assume the native byte order.
     if ((buf[9] & 0xf0) == (is_little_endian() ? 0x10 : 0x40))
-      toggle_endiannes();
+      toggle_endianness();
 
     std::int32_t tmp_header_offset;
     std::memcpy(&tmp_header_offset, buf + 4, 4);
@@ -518,9 +536,9 @@ struct Mtz {
     return UnitCell(a, b, c, alpha, beta, gamma);
   }
 
-  void warn(const std::string& text) const {
+  template<typename T> void warn(const T& text) const {
     if (warnings)
-      std::fprintf(warnings, "%s\n", text.c_str());
+      *warnings << text << std::endl;
   }
 
   template<typename Stream>
@@ -777,6 +795,9 @@ struct Mtz {
     }
   }
 
+  /// the same as read_input(MaybeGzipped(path), with_data)
+  void read_file_gz(const std::string& path, bool with_data=true);
+
   std::vector<int> sorted_row_indices(int use_first=3) const {
     if (!has_data())
       fail("No data.");
@@ -819,113 +840,24 @@ struct Mtz {
       data[offset + i] = static_cast<float>(hkl[i]);
   }
 
-  // (for merged MTZ only) change HKL to ASU equivalent, adjust phases
-  void ensure_asu(bool tnt_asu=false) {
-    if (!is_merged())
-      fail("Mtz::ensure_asu() is for merged MTZ only");
-    if (!spacegroup)
-      return;
-    GroupOps gops = spacegroup->operations();
-    ReciprocalAsu asu(spacegroup, tnt_asu);
-    std::vector<int> phase_columns = positions_of_columns_with_type('P');
-    std::vector<int> abcd_columns = positions_of_columns_with_type('A');
-    std::vector<int> dano_columns = positions_of_columns_with_type('D');
-    std::vector<std::pair<int,int>> plus_minus_columns = positions_of_plus_minus_columns();
-    bool no_special_columns = phase_columns.empty() && abcd_columns.empty() &&
-                              plus_minus_columns.empty() && dano_columns.empty();
-    bool centric = no_special_columns || gops.is_centrosymmetric();
-    for (size_t n = 0; n < data.size(); n += columns.size()) {
-      Miller hkl = get_hkl(n);
-      if (asu.is_in(hkl))
-        continue;
-      auto result = asu.to_asu(hkl, gops);
-      // cf. impl::move_to_asu() in asudata.hpp
-      set_hkl(n, result.first);
-      if (no_special_columns)
-        continue;
-      int isym = result.second;
-      if (!phase_columns.empty() || !abcd_columns.empty()) {
-        const Op& op = gops.sym_ops[(isym - 1) / 2];
-        double shift = op.phase_shift(hkl);
-        if (shift != 0) {
-          if (isym % 2 == 0)
-            shift = -shift;
-          double shift_deg = deg(shift);
-          for (int col : phase_columns)
-            data[n + col] = float(data[n + col] + shift_deg);
-          for (auto i = abcd_columns.begin(); i+3 < abcd_columns.end(); i += 4) {
-            double sinx = std::sin(shift);
-            double cosx = std::cos(shift);
-            double sin2x = 2 * sinx * cosx;
-            double cos2x = sq(cosx)- sq(sinx);
-            double a = data[n + *(i+0)];
-            double b = data[n + *(i+1)];
-            double c = data[n + *(i+2)];
-            double d = data[n + *(i+3)];
-            // a sin(x+y) + b cos(x+y) = a sin(x) cos(y) - b sin(x) sin(y)
-            //                         + a cos(x) sin(y) + b cos(x) cos(y)
-            data[n + *(i+0)] = float(a * cosx - b * sinx);
-            data[n + *(i+1)] = float(a * sinx + b * cosx);
-            data[n + *(i+2)] = float(c * cos2x - d * sin2x);
-            data[n + *(i+3)] = float(c * sin2x + d * cos2x);
-          }
-        }
-      }
-      if (isym % 2 == 0 && !centric) {
-        for (std::pair<int,int> cols : plus_minus_columns)
-          std::swap(data[n + cols.first], data[n + cols.second]);
-        for (int col : dano_columns)
-          data[n + col] = -data[n + col];
-      }
-    }
-  }
+  /// Returns offset of the first hkl or (size_t)-1. Can be slow.
+  size_t find_offset_of_hkl(const Miller& hkl, size_t start=0) const;
 
-  // (for unmerged MTZ only) change HKL according to M/ISYM
-  bool switch_to_original_hkl() {
-    if (indices_switched_to_original)
-      return false;
-    if (!has_data())
-      fail("switch_to_original_hkl(): data not read yet");
-    const Column* col = column_with_label("M/ISYM");
-    if (col == nullptr || col->type != 'Y' || col->idx < 3)
-      return false;
-    std::vector<Op> inv_symops;
-    inv_symops.reserve(symops.size());
-    for (const Op& op : symops)
-      inv_symops.push_back(op.inverse());
-    for (size_t n = 0; n + col->idx < data.size(); n += columns.size()) {
-      int isym = static_cast<int>(data[n + col->idx]) & 0xFF;
-      const Op& op = inv_symops.at((isym - 1) / 2);
-      Miller hkl = op.apply_to_hkl(get_hkl(n));
-      int sign = (isym & 1) ? 1 : -1;
-      for (int i = 0; i < 3; ++i)
-        data[n+i] = static_cast<float>(sign * hkl[i]);
-    }
-    indices_switched_to_original = true;
-    return true;
-  }
+  /// (for merged MTZ only) change HKL to ASU equivalent, adjust phases, etc
+  void ensure_asu(bool tnt_asu=false);
 
-  // (for unmerged MTZ only) change HKL to ASU equivalent and set ISYM
-  bool switch_to_asu_hkl() {
-    if (!indices_switched_to_original)
-      return false;
-    if (!has_data())
-      fail("switch_to_asu_hkl(): data not read yet");
-    const Column* col = column_with_label("M/ISYM");
-    if (col == nullptr || col->type != 'Y' || col->idx < 3 || !spacegroup)
-      return false;
-    size_t misym_idx = col->idx;
-    UnmergedHklMover hkl_mover(spacegroup);
-    for (size_t n = 0; n + col->idx < data.size(); n += columns.size()) {
-      Miller hkl = get_hkl(n);
-      int isym = hkl_mover.move_to_asu(hkl);  // modifies hkl
-      set_hkl(n, hkl);
-      float& misym = data[n + misym_idx];
-      misym = float(((int)misym & ~0xff) | isym);
-    }
-    indices_switched_to_original = false;
-    return true;
-  }
+  /// reindex data, usually followed by ensure_asu()
+  void reindex(const Op& op, std::ostream* out);
+
+  /// Change symmetry to P1 and expand reflections. Does not sort.
+  /// Similar to command EXPAND in SFTOOLS.
+  void expand_to_p1();
+
+  /// (for unmerged MTZ only) change HKL according to M/ISYM
+  bool switch_to_original_hkl();
+
+  /// (for unmerged MTZ only) change HKL to ASU equivalent and set ISYM
+  bool switch_to_asu_hkl();
 
   Dataset& add_dataset(const std::string& name) {
     int id = 0;
@@ -991,8 +923,7 @@ struct Mtz {
       dst.min_value = src.min_value;
       dst.max_value = src.max_value;
       dst.source = src.source;
-      if (src_mtz == this)
-        dst.dataset_id = src.dataset_id;
+      dst.dataset_id = src.dataset_id;
     }
     if (src_mtz == this) {
       // internal copying
@@ -1059,6 +990,7 @@ struct Mtz {
     expand_data_rows(1 + trailing_cols.size(), dest_idx);
     // copy the data
     const Column& src_col_now = col_idx < 0 ? src_col : columns[col_idx];
+    // most of the work (hkl-based row matching and data copying) is done here:
     do_replace_column(dest_idx, src_col_now, trailing_cols);
     return columns[dest_idx];
   }
@@ -1068,10 +1000,8 @@ struct Mtz {
     columns.erase(columns.begin() + idx);
     for (size_t i = idx; i < columns.size(); ++i)
       --columns[i].idx;
-    for (size_t dest = idx, source = idx + 1; source < data.size(); ++source)
-      for (size_t i = 0; i < columns.size() && source < data.size(); ++i)
-        data[dest++] = data[source++];
-    data.resize(columns.size() * nreflections);
+    vector_remove_column(data, columns.size(), idx);
+    assert(columns.size() * nreflections == data.size());
   }
 
   template <typename Func>
@@ -1094,20 +1024,10 @@ struct Mtz {
     size_t old_row_size = columns.size() - added;
     if (data.size() != old_row_size * nreflections)
       fail("Internal error");
-    data.resize(columns.size() * nreflections);
     size_t pos = pos_ == -1 ? old_row_size : (size_t) pos_;
     if (pos > old_row_size)
       fail("expand_data_rows(): pos out of range");
-    std::vector<float>::iterator dst = data.end();
-    for (int i = nreflections; i-- != 0; ) {
-      for (size_t j = old_row_size; j-- != pos; )
-        *--dst = data[i * old_row_size + j];
-      for (size_t j = added; j-- != 0; )
-        *--dst = NAN;
-      for (size_t j = pos; j-- != 0; )
-        *--dst = data[i * old_row_size + j];
-    }
-    assert(dst == data.begin());
+    vector_insert_columns(data, old_row_size, (size_t)nreflections, added, pos, NAN);
   }
 
   void set_data(const float* new_data, size_t n) {
@@ -1121,8 +1041,10 @@ struct Mtz {
   // Function for writing MTZ file
   void write_to_cstream(std::FILE* stream) const;
   void write_to_string(std::string& str) const;
-  template<typename Write> void write_to_stream(Write write) const;
   void write_to_file(const std::string& path) const;
+
+private:
+  template<typename Write> void write_to_stream(Write write) const;
 };
 
 
@@ -1138,7 +1060,6 @@ Mtz read_mtz(Input&& input, bool with_data) {
   mtz.read_input(std::forward<Input>(input), with_data);
   return mtz;
 }
-
 
 // Abstraction of data source, cf. ReflnDataProxy.
 struct MtzDataProxy {
@@ -1175,168 +1096,5 @@ struct MtzExternalDataProxy : MtzDataProxy {
 inline MtzDataProxy data_proxy(const Mtz& mtz) { return {mtz}; }
 
 } // namespace gemmi
-
-#ifdef GEMMI_WRITE_IMPLEMENTATION
-
-#include "sprintf.hpp"
-
-namespace gemmi {
-
-#define WRITE(...) do { \
-    int len = gf_snprintf(buf, 81, __VA_ARGS__); \
-    if (len < 80) \
-      std::memset(buf + len, ' ', 80 - len); \
-    if (write(buf, 80, 1) != 1) \
-      sys_fail("Writing MTZ file failed"); \
-  } while(0)
-
-template<typename Write>
-void Mtz::write_to_stream(Write write) const {
-  // uses: data, spacegroup, nreflections, batches, cell, sort_order,
-  //       valm, columns, datasets, history
-  if (!has_data())
-    fail("Cannot write Mtz which has no data");
-  if (!spacegroup)
-    fail("Cannot write Mtz which has no space group");
-  char buf[81] = {'M', 'T', 'Z', ' ', '\0'};
-  std::int64_t real_header_start = (int64_t) columns.size() * nreflections + 21;
-  std::int32_t header_start = (int32_t) real_header_start;
-  if (real_header_start > std::numeric_limits<int32_t>::max()) {
-    header_start = -1;
-  } else {
-    real_header_start = 0;
-  }
-  std::memcpy(buf + 4, &header_start, 4);
-  std::int32_t machst = is_little_endian() ? 0x00004144 : 0x11110000;
-  std::memcpy(buf + 8, &machst, 4);
-  std::memcpy(buf + 12, &real_header_start, 8);
-  if (write(buf, 80, 1) != 1 ||
-      write(data.data(), 4, data.size()) != data.size())
-    fail("Writing MTZ file failed");
-  WRITE("VERS MTZ:V1.1");
-  WRITE("TITLE %s", title.c_str());
-  WRITE("NCOL %8zu %12d %8zu", columns.size(), nreflections, batches.size());
-  if (cell.is_crystal())
-    WRITE("CELL  %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f",
-          cell.a, cell.b, cell.c, cell.alpha, cell.beta, cell.gamma);
-  WRITE("SORT  %3d %3d %3d %3d %3d", sort_order[0], sort_order[1],
-        sort_order[2], sort_order[3], sort_order[4]);
-  GroupOps ops = spacegroup->operations();
-  char lat_type = spacegroup->ccp4_lattice_type();
-  WRITE("SYMINF %3d %2d %c %5d %*s'%c%s' PG%s",
-        ops.order(),               // number of symmetry operations
-        (int) ops.sym_ops.size(),  // number of primitive operations
-        lat_type,                  // lattice type
-        spacegroup->ccp4,          // space group number
-        20 - (int) std::strlen(spacegroup->hm), "",
-        lat_type,                  // space group name (first letter)
-        spacegroup->hm + 1,        // space group name (the rest)
-        spacegroup->point_group_hm()); // point group name
-  if (!symops.empty() && ops.is_same_as(split_centering_vectors(symops)))
-    for (Op op : symops)
-      WRITE("SYMM %s", to_upper(op.triplet()).c_str());
-  else
-    for (Op op : ops)
-      WRITE("SYMM %s", to_upper(op.triplet()).c_str());
-  auto reso = calculate_min_max_1_d2();
-  WRITE("RESO %-20.12f %-20.12f", reso[0], reso[1]);
-  if (std::isnan(valm))
-    WRITE("VALM NAN");
-  else
-    WRITE("VALM %f", valm);
-  auto format17 = [](float f) {
-    char buffer[18];
-    int len = gf_snprintf(buffer, 18, "%.9f", f);
-    return std::string(buffer, len > 0 ? std::min(len, 17) : 0);
-  };
-  for (const Column& col : columns) {
-    auto minmax = calculate_min_max_disregarding_nans(col.begin(), col.end());
-    const char* label = !col.label.empty() ? col.label.c_str() : "_";
-    WRITE("COLUMN %-30s %c %17s %17s %4d",
-          label, col.type,
-          format17(minmax[0]).c_str(), format17(minmax[1]).c_str(),
-          col.dataset_id);
-    if (!col.source.empty())
-      WRITE("COLSRC %-30s %-36s  %4d", label, col.source.c_str(), col.dataset_id);
-  }
-  WRITE("NDIF %8zu", datasets.size());
-  for (const Dataset& ds : datasets) {
-    WRITE("PROJECT %7d %s", ds.id, ds.project_name.c_str());
-    WRITE("CRYSTAL %7d %s", ds.id, ds.crystal_name.c_str());
-    WRITE("DATASET %7d %s", ds.id, ds.dataset_name.c_str());
-    const UnitCell& uc = (ds.cell.is_crystal() && ds.cell.a > 0 ? ds.cell : cell);
-    WRITE("DCELL %9d %10.4f%10.4f%10.4f%10.4f%10.4f%10.4f",
-          ds.id, uc.a, uc.b, uc.c, uc.alpha, uc.beta, uc.gamma);
-    WRITE("DWAVEL %8d %10.5f", ds.id, ds.wavelength);
-    for (size_t i = 0; i < batches.size(); i += 12) {
-      std::memcpy(buf, "BATCH ", 6);
-      int pos = 6;
-      for (size_t j = i; j < std::min(batches.size(), i + 12); ++j, pos += 6)
-        gf_snprintf(buf + pos, 7, "%6zu", j + 1);
-      std::memset(buf + pos, ' ', 80 - pos);
-      if (write(buf, 80, 1) != 1)
-        fail("Writing MTZ file failed");
-    }
-  }
-  WRITE("END");
-  if (!history.empty()) {
-    // According to mtzformat.html the file can have only up to 30 history
-    // lines, but we don't enforce it here.
-    WRITE("MTZHIST %3zu", history.size());
-    for (const std::string& line : history)
-      WRITE("%s", line.c_str());
-  }
-  if (!batches.empty()) {
-    WRITE("MTZBATS");
-    for (const Batch& batch : batches) {
-      // keep the numbers the same as in files written by libccp4
-      WRITE("BH %8d %7zu %7zu %7zu",
-            batch.number, batch.ints.size() + batch.floats.size(),
-            batch.ints.size(), batch.floats.size());
-      WRITE("TITLE %.70s", batch.title.c_str());
-      if (batch.ints.size() != 29 || batch.floats.size() != 156)
-        fail("wrong size of binaries batch headers");
-      write(batch.ints.data(), 4, batch.ints.size());
-      write(batch.floats.data(), 4, batch.floats.size());
-      WRITE("BHCH  %7.7s %7.7s %7.7s",
-            batch.axes.size() > 0 ? batch.axes[0].c_str() : "",
-            batch.axes.size() > 1 ? batch.axes[1].c_str() : "",
-            batch.axes.size() > 2 ? batch.axes[2].c_str() : "");
-    }
-  }
-  WRITE("MTZENDOFHEADERS");
-  if (!appended_text.empty()) {
-    if (write(appended_text.data(), appended_text.size(), 1) != 1)
-      fail("Writing MTZ file failed");
-  }
-}
-
-#undef WRITE
-
-void Mtz::write_to_cstream(std::FILE* stream) const {
-  write_to_stream([&](const void *ptr, size_t size, size_t nmemb) {
-      return std::fwrite(ptr, size, nmemb, stream);
-  });
-}
-
-void Mtz::write_to_string(std::string& str) const {
-  write_to_stream([&](const void *ptr, size_t size, size_t nmemb) {
-      str.append(static_cast<const char*>(ptr), size * nmemb);
-      return nmemb;
-  });
-}
-
-void Mtz::write_to_file(const std::string& path) const {
-  fileptr_t f = file_open(path.c_str(), "wb");
-  try {
-    return write_to_cstream(f.get());
-  } catch (std::runtime_error& e) {
-    fail(std::string(e.what()) + ": " + path);
-  }
-}
-
-} // namespace gemmi
-
-#endif // GEMMI_WRITE_IMPLEMENTATION
 
 #endif

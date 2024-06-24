@@ -34,6 +34,7 @@ enum { NoOp=0, Help=1, Version=2, Verbose=3 };
 extern const option::Descriptor CommonUsage[];
 
 std::vector<int> parse_comma_separated_ints(const char* arg);
+std::vector<double> parse_blank_separated_numbers(const char* arg);
 
 struct Arg: public option::Arg {
   static option::ArgStatus Required(const option::Option& option, bool msg);
@@ -45,11 +46,15 @@ struct Arg: public option::Arg {
   static option::ArgStatus Int(const option::Option& option, bool msg);
   static option::ArgStatus Int3(const option::Option& option, bool msg);
   static option::ArgStatus Float(const option::Option& option, bool msg);
+  static option::ArgStatus Float3(const option::Option& option, bool msg);
   static option::ArgStatus CoorFormat(const option::Option& option, bool msg) {
-    return Choice(option, msg, {"cif", "pdb", "json", "chemcomp"});
+    return Choice(option, msg, {"cif", "mmcif", "pdb", "json", "mmjson", "chemcomp"});
   }
   static option::ArgStatus CifStyle(const option::Option& option, bool msg) {
     return Arg::Choice(option, msg, {"plain", "pdbx", "aligned"});
+  }
+  static option::ArgStatus AsuChoice(const option::Option& option, bool msg) {
+    return Arg::Choice(option, msg, {"ccp4", "tnt"});
   }
 };
 
@@ -82,20 +87,21 @@ struct OptParser : option::Parser {
       return (options[opt].arg[0] & ~0x20) == 'Y';
     return default_;
   }
+  int integer_or(int opt, int default_) const;
 };
 
 namespace gemmi { enum class CoorFormat; }
-namespace gemmi { namespace cif { enum class Style; } }
+namespace gemmi { namespace cif { struct WriteOptions; } }
 
 // to be used with Arg::CoorFormat
 gemmi::CoorFormat coor_format_as_enum(const option::Option& format_in);
 
 // to be used with Arg::CifStyle
-gemmi::cif::Style cif_style_as_enum(const option::Option& cif_style);
+gemmi::cif::WriteOptions cif_write_options(const option::Option& cif_style);
 
 // can be used with paths_from_args_or_file()
 bool starts_with_pdb_code(const std::string& s);
 
-void print_version(const char* program_name);
+void print_version(const char* program_name, bool verbose=false);
 
 void read_spec_file(const char* path, std::vector<std::string>& output);

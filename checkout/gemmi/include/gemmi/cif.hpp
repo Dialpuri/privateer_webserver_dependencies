@@ -179,12 +179,26 @@ template<typename Rule> struct Errors : public pegtl::normal<Rule> {
 
 template<typename Rule> struct Action : pegtl::nothing<Rule> {};
 
+// We don't store comments here. We don't have a proper storage for comments.
+// They can be stored as Items, but this leaves out comments before
+// the first block, comments inside loops, or between tag and value.
+// Additionally, a comment after a loop cannot be processed immediately
+// b/c at that point we don't know if the loop is finished yet.
+// If we were to store (a subset of) comments, we'd need to check first
+// how it affects performance.
+//template<> struct Action<rules::comment> {
+//  template<typename Input> static void apply(const Input& in, Document& out) {
+//  }
+//};
+
 template<> struct Action<rules::datablockname> {
   template<typename Input> static void apply(const Input& in, Document& out) {
     out.blocks.emplace_back(in.string());
     Block& block = out.blocks.back();
-    if (block.name.empty()) // RELION's case
-      block.name += '#';
+    // Empty block name (just data_ ) is not STAR/CIF conformant,
+    // but it's written by RELION and buccaneer; we must support it.
+    if (block.name.empty())
+      block.name += ' ';
     out.items_ = &block.items;
   }
 };
@@ -245,7 +259,9 @@ template<> struct Action<rules::loop> {
     assert(last_item.type == ItemType::Loop);
     const Loop& loop = last_item.loop;
     if (loop.values.size() % loop.tags.size() != 0)
-      throw pegtl::parse_error("Wrong number of values in the loop", in);
+      throw pegtl::parse_error(
+          "Wrong number of values in loop " + loop.common_prefix() + "*",
+          in);
   }
 };
 

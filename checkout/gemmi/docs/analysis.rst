@@ -24,7 +24,7 @@ on the search radius. Each cell stores the list of atoms in its area;
 these lists are used for fast lookup of atoms.
 
 In Gemmi the cell technique is implemented in a class named ``NeighborSearch``.
-The implementation works with both crystal and non-crystal system and:
+The implementation works with both crystal and non-crystal systems and:
 
 * handles crystallographic symmetry (including non-standard settings with
   origin shift that are present in a couple hundreds of PDB entries),
@@ -42,22 +42,22 @@ The implementation works with both crystal and non-crystal system and:
 
 Note that while an atom can be bonded with its own symmetric image,
 it sometimes happens that an atom meant to be on a special position
-is slightly off, and its symmetric images represent the same atom
-(so we may have four nearby images each with occupancy 0.25).
+is slightly off, and its symmetric images represent the same atom (so after
+expanding the symmetry we may have four nearby images each with occupancy 0.25).
 Such images will be returned by the NeighborSearch class as neighbors
 and need to be filtered out by the users.
 
 The NeighborSearch constructor divides the unit cell into bins.
-For this it needs to know the maximum radius that will be used in searches,
+For this it needs to know the search radius for which we optimize bins,
 as well as the unit cell. Since the system may be non-periodic,
 the constructor also takes the model as an argument -- it is used to
 calculate the bounding box for the model if there is no unit cell.
-It is also stored and used if ``populate()`` is called.
-The C++ signature (in ``gemmi/neighbor.hpp``) is::
+The reference to model is stored and is also used if ``populate()`` is called.
+The C++ signature (in ``gemmi/neighbor.hpp``) of the constructor is::
 
-  NeighborSearch::NeighborSearch(Model& model, const UnitCell& cell, double max_radius)
+  NeighborSearch::NeighborSearch(Model& model, const UnitCell& cell, double radius)
 
-Then the cell lists need to be populated with items either by calling::
+The cell lists need to be populated with items either by calling::
 
   void NeighborSearch::populate(bool include_h=true)
 
@@ -79,13 +79,13 @@ An example in Python:
 
   >>> import gemmi
   >>> st = gemmi.read_structure('../tests/1pfe.cif.gz')
-  >>> ns = gemmi.NeighborSearch(st[0], st.cell, 3).populate(include_h=False)
+  >>> ns = gemmi.NeighborSearch(st[0], st.cell, 5).populate(include_h=False)
 
 Here we do the same using ``add_chain()`` instead of ``populate()``:
 
 .. doctest::
 
-  >>> ns = gemmi.NeighborSearch(st[0], st.cell, 3)
+  >>> ns = gemmi.NeighborSearch(st[0], st.cell, 5)
   >>> for chain in st[0]:
   ...     ns.add_chain(chain, include_h=False)
 
@@ -93,7 +93,7 @@ And again the same, with complete control over which atoms are included:
 
 .. doctest::
 
-  >>> ns = gemmi.NeighborSearch(st[0], st.cell, 3)
+  >>> ns = gemmi.NeighborSearch(st[0], st.cell, 5)
   >>> for n_ch, chain in enumerate(st[0]):
   ...     for n_res, res in enumerate(chain):
   ...         for n_atom, atom in enumerate(res):
@@ -101,6 +101,10 @@ And again the same, with complete control over which atoms are included:
   ...                 ns.add_atom(atom, n_ch, n_res, n_atom)
   ...
 
+All these function store ``Mark``\ s in cell-lists. A mark contains position of
+atom's symmetry image and indices that point to the original atom.
+Searching for neighbors returns marks, from which we can obtain original chains,
+residues and atoms.
 
 NeighborSearch has a couple of functions for searching.
 The first one takes atom as an argument::
@@ -117,13 +121,13 @@ The first one takes atom as an argument::
 ``find_neighbors()`` checks altloc of the atom and
 considers as potential neighbors only atoms from the same
 conformation. In particular, if altloc is empty all atoms are considered.
-Non-negative ``min_dist`` in the ``find_neighbors()`` call prevents
+Positive ``min_dist`` in the ``find_neighbors()`` call prevents
 the atom whose neighbors we search from being included in the results
 (the distance of the atom to itself is zero).
 
 The second one takes position and altloc as explicit arguments::
 
-  std::vector<Mark*> NeighborSearch::find_atoms(const Position& pos, char altloc, float radius)
+  std::vector<Mark*> NeighborSearch::find_atoms(const Position& pos, char altloc, float min_dist, float radius)
 
 .. doctest::
 
@@ -132,13 +136,28 @@ The second one takes position and altloc as explicit arguments::
   >>> len(marks)
   7
 
-Additionally, in C++ you may use a function that takes a callback
-as the last argument (usage examples are in the source code)::
+To find only the nearest atom (regardless of altloc), use function::
+
+  Mark* find_nearest_atom(const Position& pos, float radius=INFINITY)
+
+.. doctest::
+
+  >>> ns.find_nearest_atom(point)
+  <gemmi.NeighborSearch.Mark 3 of atom 0/7/9 element C>
+
+All the above functions can search in a radius bigger than the radius passed
+to the NeighborSearch constructor, but it requires checking more cells
+(125+ instead of 27), which is usually not optimal.
+On the other hand, it is usually also not optimal to use big cells
+(radius ≫ 10Å). And very small ones (radius < 4Å) are also inefficient.
+
+In C++ you may use a low-level function that takes a callback
+as an argument (usage examples are in the source code)::
 
   template<typename T>
-  void NeighborSearch::for_each(const Position& pos, char altloc, float radius, const T& func)
+  void NeighborSearch::for_each(const Position& pos, char altloc, float radius, const T& func, int k=1)
 
-Cell-lists store ``Mark``\ s. When searching for neighbors you get references
+Cell-lists contain ``Mark``\ s. When searching for neighbors you get references
 (in C++ -- pointers) to these marks.
 ``Mark`` has a number of properties: ``x``, ``y``, ``z``,
 ``altloc``, ``element``, ``image_idx`` (index of the symmetry operation
@@ -149,17 +168,17 @@ that was used to generate this mark, 0 for identity),
 
   >>> mark = marks[0]
   >>> mark
-  <gemmi.NeighborSearch.Mark O of atom 0/7/3>
-  >>> mark.x, mark.y, mark.z
-  (19.659000396728516, 20.248884201049805, 17.645000457763672)
+  <gemmi.NeighborSearch.Mark 11 of atom 0/7/2 element O>
+  >>> mark.pos
+  <gemmi.Position(21.091, 18.2279, 17.841)>
   >>> mark.altloc
   '\x00'
   >>> mark.element
-  <gemmi.Element: O>
+  gemmi.Element('O')
   >>> mark.image_idx
   11
   >>> mark.chain_idx, mark.residue_idx, mark.atom_idx
-  (0, 7, 3)
+  (0, 7, 2)
 
 The references to the original model and to atoms are not stored.
 ``Mark`` has a method ``to_cra()`` that needs to be called with ``Model``
@@ -175,32 +194,24 @@ as an argument to get a triple of Chain, Residue and Atom::
   >>> cra.residue
   <gemmi.Residue 8(DC) with 19 atoms>
   >>> cra.atom
-  <gemmi.Atom O5' at (-0.0, 13.8, -17.6)>
+  <gemmi.Atom OP2 at (1.4, 15.9, -17.8)>
 
-``Mark`` also has a helper method ``pos()`` that returns
-``Position(x, y, z)``::
-
-  Position NeighborSearch::Mark::pos() const
-
-.. doctest::
-
-  >>> mark.pos()
-  <gemmi.Position(19.659, 20.2489, 17.645)>
-
-Note that it can be the position of a symmetric image of the atom.
+Note that ``mark.pos`` can be the position of a symmetric image of the atom.
 In this example the "original" atom is in a different location:
 
 .. doctest::
 
+  >>> mark.pos
+  <gemmi.Position(21.091, 18.2279, 17.841)>
   >>> cra.atom.pos
-  <gemmi.Position(-0.028, 13.85, -17.645)>
+  <gemmi.Position(1.404, 15.871, -17.841)>
 
 The symmetry operation that relates the original position and its
 image is composed of two parts: one of symmetry transformations
 in the unit cell and a shift of the unit cell that we often
 call here the PBC (periodic boundary conditions) shift.
 
-The first part is stored explicitely as ``mark.image_idx``.
+The first part is stored explicitly as ``mark.image_idx``.
 The corresponding transformation is:
 
 .. doctest::
@@ -212,18 +223,31 @@ The corresponding transformation is:
                [0, -1, 0]
                [0, 0, -1]>
 
-
 To find the full symmetry operation we need to determine the nearest
 image under PBC:
 
 .. doctest::
 
   >>> st.cell.find_nearest_pbc_image(point, cra.atom.pos, mark.image_idx)
-  <gemmi.NearestImage 12_665 in distance 2.39>
+  <gemmi.NearestImage 12_665 in distance 3.00>
+
+To calculate only the distance to the atom, you can use the same function
+with ``mark.pos`` and symmetry operation index 0. ``mark.pos`` represents
+the position of the atom that has already been transformed by the symmetry
+operation ``mark.image_idx`` (and shifted into the unit cell).
+
+.. doctest::
+
+  >>> st.cell.find_nearest_pbc_image(point, mark.pos, 0)
+  <gemmi.NearestImage 1_555 in distance 3.00>
+  >>> _.dist()  # doctest: +ELLIPSIS
+  2.998659073040...
 
 For more information see the :ref:`properties of NearestImage <nearestimage>`.
 
 The neighbor search can also be used with small molecule structures.
+Here, we have MgI\ :sub:`2`, with each Mg atom surrounded by 6 iodine atoms,
+in a distance 2.92Å:
 
 .. doctest::
 
@@ -232,11 +256,13 @@ The neighbor search can also be used with small molecule structures.
   >>> ns = gemmi.NeighborSearch(small, 4.0).populate()
   >>> for mark in ns.find_site_neighbors(mg_site, min_dist=0.1):
   ...   site = mark.to_site(small)
-  ...   nim = small.cell.find_nearest_pbc_image(mg_site.fract, site.fract, mark.image_idx)
-  ...   print(site.label, 'image #%d' % mark.image_idx, nim.symmetry_code(),
-  ...         'dist=%.2f' % nim.dist())
-  I image #0 1_555 dist=2.92
-  I image #3 4_467 dist=2.92
+  ...   print(site.label, 'symmetry op #%d' % mark.image_idx)
+  I symmetry op #0
+  I symmetry op #0
+  I symmetry op #0
+  I symmetry op #3
+  I symmetry op #3
+  I symmetry op #3
 
 
 Contact search
@@ -356,7 +382,7 @@ The ContactSearch.Result class has four properties:
   >>> results[0].image_idx
   52
   >>> results[0].dist
-  2.8613362312316895
+  2.8613363437597505
 
 The first two properties are :ref:`CRA <CRA>`\ s for the involved atoms.
 The ``image_idx`` is an index of the symmetry image (both crystallographic
@@ -531,9 +557,14 @@ which is sometimes called CID (Coordinate ID). The MMDB syntax is described
 at the bottom of
 the `pdbcur documentation <http://legacy.ccp4.ac.uk/html/pdbcur.html>`_.
 
-The selection has a form of /-separated parts:
-/models/chains/residues/atoms. Empty parts can be omitted when it's
-not ambiguous. Gemmi (but not MMDB) can take additional properties
+The selection has a form of slash-separated parts:
+/models/chains/residues/atoms. Leading and trailing parts can be omitted
+when it's not ambiguous. An empty field means that all items match,
+with two exceptions. The empty chain part (e.g. ``/1//``) matches only
+a chain without an ID (blank chainID in the PDB format;
+not spec-conformant, but possible in working files). The empty altloc
+(examples will follow) matches atoms with a blank altLoc field.
+Gemmi (but not MMDB) can take additional properties
 added at the end after a semicolon (;).
 
 Let us go through the individual filters first:
@@ -541,23 +572,23 @@ Let us go through the individual filters first:
 * ``/1`` -- selects model 1 (if the PDB file doesn't have MODEL records,
   it is assumed that the only model is model 1).
 * ``//D`` (or just ``D``) -- selects chain D.
-* ``///10-30`` (or ``10-30``) -- residues with sequence IDs from 10 to 30.
-* ``///10A-30A`` (or ``10A-30A`` or ``///10.A-30.A`` or ``10.A-30.A``) --
+* ``//*/10-30`` (or ``10-30``) -- residues with sequence IDs from 10 to 30.
+* ``//*/10A-30A`` (or ``10A-30A`` or ``///10.A-30.A`` or ``10.A-30.A``) --
   sequence ID can include insertion code. The MMDB syntax has dot between
   sequence sequence number and insertion code. In Gemmi the dot is optional.
-* ``///(ALA)`` (or ``(ALA)``) -- selects residues with a given name.
-* ``////CB`` (or ``CB:*`` or ``CB[*]``) -- selects atoms with a given name.
-* ``////[P]`` (or just ``[P]``) -- selects phosphorus atoms.
-* ``////:B`` (or ``:B``) -- selects atoms with altloc B.
-* ``////;q<0.5`` (or ``;q<0.5``) -- selects atoms with occupancy below 0.5
+* ``//*/(ALA)`` (or ``(ALA)``) -- selects residues with a given name.
+* ``//*//CB`` (or ``CB:*`` or ``CB[*]``) -- selects atoms with a given name.
+* ``//*//[P]`` (or just ``[P]``) -- selects phosphorus atoms.
+* ``//*//:B`` (or ``:B``) -- selects atoms with altloc B.
+* ``//*//:`` (or ``:``) -- selects atoms without altloc.
+* ``//*//;q<0.5`` (or ``;q<0.5``) -- selects atoms with occupancy below 0.5
   (inspired by PyMOL, where it'd be ``q<0.5``).
-* ``////;b>40`` (or ``;b>40``) -- selects atoms with isotropic B-factor
+* ``//*//;b>40`` (or ``;b>40``) -- selects atoms with isotropic B-factor
   above a given value.
 * ``;polymer`` or ``;solvent`` -- selects polymer or solvent residues
   (if the PDB file doesn't have TER records, call setup_entities() first).
 * ``*`` -- selects all atoms.
 
-Note that the chain name and altloc can be an empty.
 The syntax supports also comma-separated lists and negations with ``!``:
 
 * ``(!ALA)`` -- all residues but alanine,
@@ -576,7 +607,7 @@ In Gemmi, if ':' is absent the altloc is not checked ("*").
 
 Note: the selections in Gemmi are not widely used yet and the API may evolve.
 
-A selection is is a standalone object with a list of filters that
+A selection is a standalone object with a list of filters that
 can be applied to any Structure, Model or its part.
 Empty selection matches all atoms:
 
@@ -584,37 +615,19 @@ Empty selection matches all atoms:
 
   >>> sel = gemmi.Selection()  # empty - no filters
 
-Selection initialized with a string parses the string and creates
-corresponding filters:
-
-.. doctest::
-
-  >>> # select all Cl atoms
-  >>> sel = gemmi.Selection('[CL]')
-
-The selection can then be used on any structure.
-A helper function ``first()`` returns the first matching atom:
-
-.. doctest::
-
-  >>> st = gemmi.read_structure('../tests/1pfe.cif.gz')
-  >>> # get the first result as pointer to model and CRA (chain, residue, atom)
-  >>> sel.first(st)
-  (<gemmi.Model 1 with 2 chain(s)>, <gemmi.CRA A/CL 20/CL>)
-
-Function ``str()`` creates a string from the selection:
+Selection initialized with a string:
 
 .. doctest::
 
   >>> sel = gemmi.Selection('A/1-4/N9')
-  >>> sel.str()
-  '//A/1.-4./N9'
 
-The Selection objects has methods for iterating over the selected items
-in the hierarchy:
+parses the string and creates filters corresponding to each part
+of the selection,
+which can then be used to iterate over the selected items in the hierarchy:
 
 .. doctest::
 
+  >>> st = gemmi.read_structure('../tests/1pfe.cif.gz')
   >>> for model in sel.models(st):
   ...     print('Model', model.name)
   ...     for chain in sel.chains(model):
@@ -633,9 +646,23 @@ in the hierarchy:
             - N9
      - 4(DT)
 
+Function ``str()`` creates a CID string from the selection:
+
+.. doctest::
+
+  >>> sel.str()
+  '//A/1.-4./N9'
+
+A helper function ``first()`` returns the first matching atom:
+
+.. doctest::
+
+  >>> # find the first Cl atom - returns model and CRA (chain, residue, atom)
+  >>> gemmi.Selection('[CL]').first(st)
+  (<gemmi.Model 1 with 2 chain(s)>, <gemmi.CRA A/CL 20/CL>)
 
 Selection can be used to create a new structure (or model) with a copy
-of the selection. In this example, we copy alpha-carbon atoms:
+of the selected parts. In this example, we copy alpha-carbon atoms:
 
 .. doctest::
 
@@ -655,7 +682,7 @@ of the selection. In this example, we copy alpha-carbon atoms:
   64
 
 Selection can also be used to remove atoms.
-In this example we remove atoms with B-factor above 50:
+Here, we remove atoms with a B-factor above 50:
 
 .. doctest::
 
@@ -692,7 +719,7 @@ we select residues in the radius of 8Å from a selected point:
 
   >>> selected_point = gemmi.Position(20, 40, 30)
   >>> ns = gemmi.NeighborSearch(st[0], st.cell, 8.0).populate()
-  >>> # First, a flag is set for neigbouring residues.
+  >>> # First, a flag is set for neighbouring residues.
   >>> for mark in ns.find_atoms(selected_point):
   ...     mark.to_cra(st[0]).residue.flag = 's'
   >>> # Then, we select residues with this flag.
@@ -712,7 +739,7 @@ Here, we select atoms in the radius of 8Å from a selected point:
 .. doctest::
 
   >>> # selected_point and ns are reused from the previous example
-  >>> # First, a flag is set for neigbouring atoms.
+  >>> # First, a flag is set for neighbouring atoms.
   >>> for mark in ns.find_atoms(selected_point):
   ...     mark.to_cra(st[0]).atom.flag = 's'
   >>> # Then, we select atoms with this flag.
@@ -730,16 +757,17 @@ The graph algorithms in Gemmi are limited to finding the shortest path
 between atoms (bonds = graph edges). This part of the library is not
 documented yet.
 
-The rest of this section shows how to use Gemmi together with external
-graph analysis libraries to analyse the similarity of chemical molecules.
-To do this, first we set up a graph corresponding to the molecule.
+The rest of this section shows how to use dedicated graph libraries
+to analyse chemical molecules read with gemmi.
+First, we set up a graph corresponding to the molecule.
 
-Here we show how it can be done in the Boost Graph Library.
+Here is how it can be done in C++ with the Boost Graph Library
+(`BGL <http://boost.org/libs/graph>`_):
 
 .. literalinclude:: ../examples/with_bgl.cpp
    :lines: 9-10,13-41
 
-And here we use NetworkX in Python:
+Here we use `NetworkX <https://networkx.org/>`_ in Python:
 
 .. doctest::
   :skipif: networkx is None
@@ -756,7 +784,8 @@ And here we use NetworkX in Python:
   ...     G.add_edge(bond.id1.atom, bond.id2.atom)  # ignoring bond type
   ...
 
-To show a quick example, let us count automorphisms of SO3:
+To show a quick example of working with the graph,
+let us count automorphisms of SO3:
 
 .. doctest::
   :skipif: networkx is None
@@ -767,7 +796,63 @@ To show a quick example, let us count automorphisms of SO3:
   >>> sum(1 for _ in GM.isomorphisms_iter())
   6
 
-With a bit more of code we could perform a real cheminformatics task.
+The median number of automorphisms of molecules in the CCD is only 4.
+However, the highest number of isomorphisms, as of 2023 (ignoring hydrogens,
+bond orders, chiralities), is a staggering 6879707136
+for `T8W <https://www.rcsb.org/ligand/T8W>`_.
+This value can be calculated almost instantly with nauty, which
+returns a set of *generators* of the automorphism group
+and the sets of equivalent vertices called *orbits*,
+rather than listing all automorphisms.
+Nauty is for "determining the automorphism group of a vertex-coloured graph,
+and for testing graphs for isomorphism". We can use it in Python through
+the pynauty module.
+
+Here we set up a graph in `pynauty <https://github.com/pdobsan/pynauty>`_,
+from the ``so3`` object prepared in the previous example:
+
+.. doctest::
+  :skipif: pynauty is None
+
+  >>> import pynauty
+
+  >>> n_vertices = len(so3.atoms)
+  >>> adjacency = {n: [] for n in range(n_vertices)}
+  >>> indices = {atom.id: n for n, atom in enumerate(so3.atoms)}
+  >>> elements = {atom.el.atomic_number for atom in so3.atoms}
+  >>> # The order of dict in Python 3.6+ is the insertion order.
+  >>> coloring = {elem: set() for elem in sorted(elements)}
+  >>> for n, atom in enumerate(so3.atoms):
+  ...   coloring[atom.el.atomic_number].add(n)
+  ...
+  >>> for bond in so3.rt.bonds:
+  ...   n1 = indices[bond.id1.atom]
+  ...   n2 = indices[bond.id2.atom]
+  ...   adjacency[n1].append(n2)
+  ...
+  >>> G = pynauty.Graph(n_vertices, adjacency_dict=adjacency, vertex_coloring=coloring.values())
+
+The colors of vertices in this graph correspond to elements.
+Pynauty takes a list of sets of vertices with the same color,
+without the information which color corresponds to which element.
+We sorted the elements to ensure that two graphs with the same atoms
+have the same coloring. However, SO3 and PO3 graphs would also have
+the same coloring and would be reported as isomorphic.
+So it is necessary to check if the elements in molecules are the same.
+
+You may also want to encode other properties in the graph, such as bond orders,
+atom charges and chiralities, as described in
+`this paper <https://jcheminf.biomedcentral.com/articles/10.1186/s13321-023-00692-1>`_.
+Here, we only present a simplified, minimal example.
+Now, to finish this example, let's get the order of the isomorphism group
+(which should be the same as in the NetworkX example, i.e. 6):
+
+.. doctest::
+  :skipif: pynauty is None
+
+  >>> (gen, grpsize1, grpsize2, orbits, numorb) = pynauty.autgrp(G)
+  >>> grpsize1 * 10**grpsize2
+  6.0
 
 .. _graph_isomorphism:
 
@@ -775,7 +860,7 @@ Graph isomorphism
 -----------------
 
 In this example we use Python NetworkX to compare molecules from the
-Refmac monomer library with Chemical Component Dictionary (CCD) from PDB.
+Refmac monomer library with the PDB's Chemical Component Dictionary (CCD).
 The same could be done with other graph analysis libraries,
 such as Boost Graph Library, igraph, etc.
 
@@ -1003,8 +1088,11 @@ where
   * HydrogenChange.NoChange -- no change,
   * HydrogenChange.Shift -- shift existing hydrogens to ideal (riding) positions,
   * HydrogenChange.Remove -- remove all H and D atoms,
-  * HydrogenChange.ReAdd -- discard and re-create hydrogens in ideal positions,
+  * HydrogenChange.ReAdd -- discard and re-create hydrogens in ideal positions
+    (if hydrogen position is not uniquely determined, its occupancy is set to zero),
   * HydrogenChange.ReAddButWater -- the same, but doesn't add H in waters,
+  * HydrogenChange.ReAddKnown -- the same, but doesn't add any H atoms which
+    positions are not uniquely determined,
 
 * ``reorder`` -- changes the order of atoms inside each residue
   to match the order in the corresponding monomer cif file,
@@ -1013,10 +1101,9 @@ where
   is missing in the monomer library, or when link is missing,
   or the hydrogen adding procedure comes across an unexpected configuration.
   You can set warnings=sys.stderr to only print a warning to stderr
-  and continue. sys.stderr can be replaced with any object that has 
+  and continue. sys.stderr can be replaced with any object that has
   methods ``write(str)`` and ``flush()``.
 
-If hydrogen position is not uniquely determined its occupancy is set to zero.
 
 TBC
 

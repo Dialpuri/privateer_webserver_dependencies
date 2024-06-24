@@ -9,8 +9,10 @@ from urllib.request import urlopen
 
 TAGGED_REPOS = {
     'pybind/pybind11': 'v2.6.1',
+    'scikit-build/scikit-build-core': 'v0.5.1',
     'taocpp/PEGTL': '2.4.0',
-    'cxong/tinydir': '1.2.5',
+    'cxong/tinydir': '1.2.6',
+    'fastfloat/fast_float': 'v5.0.0',
     #'madler/zlib': 'v1.2.11',
 }
 
@@ -18,7 +20,6 @@ NOT_TAGGED_REPOS = {
     'chadaustin/sajson': 'include/sajson.h',
     'sgorsten/linalg': 'linalg.h',
     'nothings/stb': 'stb_sprintf.h',
-    'fastfloat/fast_float': 'include/fast_float',
 }
 
 def load_json(url):
@@ -35,7 +36,7 @@ def check_tags():
             data = load_json('https://api.github.com/repos/%s/tags' % repo)
             latest_tag = data[0]['name']
         mark = ('   !!!' if version != latest_tag else '')
-        print('%-18s %10s %10s%s' % (repo, version, latest_tag, mark))
+        print('%-18s %10s %10s%s' % (repo[-18:], version, latest_tag, mark))
 
 def check_recent_commits():
     since = datetime.datetime.now() - datetime.timedelta(days=30)

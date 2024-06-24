@@ -13,6 +13,7 @@
 #include <stdexcept>  // for out_of_range
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 #include "elem.hpp"
 #include "fail.hpp"      // for fail
@@ -79,7 +80,15 @@ template<typename T, typename M> std::vector<T> model_subchains(M* model) {
 enum class CoorFormat { Unknown, Detect, Pdb, Mmcif, Mmjson, ChemComp };
 
 /// corresponds to _atom_site.calc_flag in mmCIF
-enum class CalcFlag : signed char { NotSet=0, Determined, Calculated, Dummy };
+enum class CalcFlag : signed char {
+  // NoHydrogen is the same as NotSet; it's used internally to mark atoms
+  // which should not have riding hydrogens.
+  // NB: add_cif_atoms() relies on this order.
+  NotSet=0, NoHydrogen, Determined, Calculated, Dummy
+};
+
+/// helper type used for Structure::shortened_ccd_codes
+struct OldToNew { std::string old, new_; };
 
 /// options affecting how pdb file is read
 struct PdbReadOptions {
@@ -87,6 +96,7 @@ struct PdbReadOptions {
   bool split_chain_on_ter = false;
   bool skip_remarks = false;
 };
+// end of PdbReadOptions for mol.rst
 
 // remove empty residues from chain, empty chains from model, etc
 template<class T> void remove_empty_children(T& obj) {
@@ -172,7 +182,6 @@ struct Residue : public ResidueId {
   OptionalNum label_seq;  // mmCIF _atom_site.label_seq_id
   EntityType entity_type = EntityType::Unknown;
   char het_flag = '\0';   // 'A' = ATOM, 'H' = HETATM, 0 = unspecified
-  bool is_cis = false;    // bond to the next residue marked as cis
   char flag = '\0';       // custom flag
   SiftsUnpResidue sifts_unp;  // UniProt reference from SIFTS
   short group_idx = 0;        // ignore - internal variable
@@ -188,7 +197,6 @@ struct Residue : public ResidueId {
     res.label_seq = label_seq;
     res.entity_type = entity_type;
     res.het_flag = het_flag;
-    res.is_cis = is_cis;
     res.flag = flag;
     return res;
   }
@@ -376,6 +384,7 @@ struct ResidueSpan : MutableVectorSpan<Residue> {
   GroupingProxy residue_groups();
   const std::string& subchain_id() const { return const_().subchain_id(); }
   ResidueGroup find_residue_group(SeqId id);
+  std::vector<std::string> extract_sequence() const { return const_().extract_sequence(); }
   ConstResidueGroup find_residue_group(SeqId id) const;
   SeqId label_seq_id_to_auth(SeqId::OptionalNum label_seq_id) const {
     return const_().label_seq_id_to_auth(label_seq_id);
@@ -606,9 +615,10 @@ inline std::string atom_str(const const_CRA& cra) {
                   cra.atom ? cra.atom->altloc : '\0');
 }
 
-inline bool atom_matches(const const_CRA& cra, const AtomAddress& addr) {
+inline bool atom_matches(const const_CRA& cra, const AtomAddress& addr, bool ignore_segment=false) {
   return cra.chain && cra.chain->name == addr.chain_name &&
-         cra.residue && cra.residue->matches(addr.res_id) &&
+         cra.residue && cra.residue->matches_noseg(addr.res_id) &&
+         (ignore_segment || cra.residue->segment == addr.res_id.segment) &&
          cra.atom && cra.atom->name == addr.atom_name &&
          cra.atom->altloc == addr.altloc;
 }
@@ -809,6 +819,7 @@ struct Model {
   ConstCraProxy all() const { return {chains}; }
 
   Atom* find_atom(const AtomAddress& address) { return find_cra(address).atom; }
+  const Atom* find_atom(const AtomAddress& address) const { return find_cra(address).atom; }
 
   std::array<int, 3> get_indices(const Chain* c, const Residue* r,
                                  const Atom* a) const {
@@ -826,11 +837,72 @@ struct Model {
     return table;
   }
 
+  CRA get_cra(Atom* atom) { return parent_index.get_cra(*this, atom); }
+  Chain* get_parent_of(Residue* res) { return parent_index.get_parent_of(*this, res); }
+
   // methods present in Structure, Model, ... - used in templates
   Model empty_copy() const { return Model(name); }
   using child_type = Chain;
   std::vector<Chain>& children() { return chains; }
   const std::vector<Chain>& children() const { return chains; }
+
+private:
+  struct ParentIndex {
+    using index_type = std::uint32_t;
+    std::unordered_map<const Atom*, std::array<index_type, 3>> atom_parents;
+    std::unordered_map<const Residue*, std::array<index_type, 2>> residue_parents;
+    void update(const Model& model) {
+      clear();
+      for (index_type ic = 0; ic < model.chains.size(); ++ic) {
+        const Chain& chain = model.chains[ic];
+        for (index_type ir = 0; ir < chain.residues.size(); ++ir) {
+          const Residue& res = chain.residues[ir];
+          residue_parents.emplace(&res, std::array<index_type,2>{ic, ir});
+          for (index_type ia = 0; ia < res.atoms.size(); ++ia)
+            atom_parents.emplace(&res.atoms[ia], std::array<index_type,3>{ic, ir, ia});
+        }
+      }
+    }
+    void clear() {
+      atom_parents.clear();
+      residue_parents.clear();
+    }
+    CRA get_cra(Model& model, Atom* atom) {
+      for (;;) {
+        auto it = atom_parents.find(atom);
+        if (it != atom_parents.end()) {
+          auto ic = it->second[0];
+          auto ir = it->second[1];
+          auto ia = it->second[2];
+          if (ic < model.chains.size()) {
+            Chain& chain = model.chains[ic];
+            if (ir < chain.residues.size()) {
+              Residue& res = chain.residues[ir];
+              if (ia < res.atoms.size() && atom == &res.atoms[ia])
+                return {&chain, &res, atom};
+            }
+          }
+        }
+        update(model);
+      }
+    }
+    Chain* get_parent_of(Model& model, Residue* res) {
+      for (;;) {
+        auto it = residue_parents.find(res);
+        if (it != residue_parents.end()) {
+          auto ic = it->second[0];
+          auto ir = it->second[1];
+          if (ic < model.chains.size()) {
+            Chain& chain = model.chains[ic];
+            if (ir < chain.residues.size() && res == &chain.residues[ir])
+              return &chain;
+          }
+        }
+        update(model);
+      }
+    }
+  };
+  ParentIndex parent_index;
 };
 
 inline Entity* find_entity_of_subchain(const std::string& subchain_id,
@@ -854,23 +926,30 @@ struct Structure {
   std::vector<NcsOp> ncs;
   std::vector<Entity> entities;
   std::vector<Connection> connections;
+  std::vector<CisPep> cispeps;
+  std::vector<ModRes> mod_residues;
   std::vector<Helix> helices;
   std::vector<Sheet> sheets;
   std::vector<Assembly> assemblies;
+  std::map<int, std::vector<int>> conect_map;
   Metadata meta;
 
   CoorFormat input_format = CoorFormat::Unknown;
   bool has_d_fraction = false;  // uses Refmac's ccp4_deuterium_fraction
+  /// in input PDB file: y = TER records were read, e = errors were detected
+  char ter_status = '\0';
 
-  // Store ORIGXn / _database_PDB_matrix.origx*
+  /// Store ORIGXn / _database_PDB_matrix.origx*
   bool has_origx = false;
   Transform origx;
 
-  // Minimal metadata with keys being mmcif tags: _entry.id, _cell.Z_PDB, ...
+  /// Minimal metadata with keys being mmcif tags: _entry.id, _cell.Z_PDB, ...
   std::map<std::string, std::string> info;
-  // original REMARK records stored if the file was read from the PDB format
+  /// Mapping of long (4+) CCD codes (residue names) to PDB-compatible ones
+  std::vector<OldToNew> shortened_ccd_codes;
+  /// original REMARK records stored if the file was read from the PDB format
   std::vector<std::string> raw_remarks;
-  // simplistic resolution value from/for REMARK 2
+  /// simplistic resolution value from/for REMARK 2
   double resolution = 0;
 
   const SpaceGroup* find_spacegroup() const {
@@ -894,6 +973,9 @@ struct Structure {
 
   Model* find_model(const std::string& model_name) {
     return impl::find_or_null(models, model_name);
+  }
+  const Model* find_model(const std::string& model_name) const {
+    return const_cast<Structure*>(this)->find_model(model_name);
   }
   Model& find_or_add_model(const std::string& model_name) {
     return impl::find_or_add(models, model_name);
@@ -929,12 +1011,18 @@ struct Structure {
   Connection* find_connection_by_name(const std::string& conn_name) {
     return impl::find_or_null(connections, conn_name);
   }
+  const Connection* find_connection_by_name(const std::string& conn_name) const {
+    return const_cast<Structure*>(this)->find_connection_by_name(conn_name);
+  }
 
   Connection* find_connection_by_cra(const const_CRA& cra1,
-                                     const const_CRA& cra2) {
+                                     const const_CRA& cra2,
+                                     bool ignore_segment=false) {
     for (Connection& c : connections)
-      if ((atom_matches(cra1, c.partner1) && atom_matches(cra2, c.partner2)) ||
-          (atom_matches(cra1, c.partner2) && atom_matches(cra2, c.partner1)))
+      if ((atom_matches(cra1, c.partner1, ignore_segment) &&
+           atom_matches(cra2, c.partner2, ignore_segment)) ||
+          (atom_matches(cra1, c.partner2, ignore_segment) &&
+           atom_matches(cra2, c.partner1, ignore_segment)))
         return &c;
     return nullptr;
   }
@@ -955,6 +1043,16 @@ struct Structure {
   }
   bool ncs_not_expanded() const {
     return std::any_of(ncs.begin(), ncs.end(), [](const NcsOp& o) { return !o.given; });
+  }
+
+  void add_conect_one_way(int serial1, int serial2, int order) {
+    auto& vec = conect_map[serial1];
+    for (int i = 0; i < order; ++i)
+      vec.insert(std::upper_bound(vec.begin(), vec.end(), serial2), serial2);
+  }
+  void add_conect(int serial1, int serial2, int order) {
+    add_conect_one_way(serial1, serial2, order);
+    add_conect_one_way(serial2, serial1, order);
   }
 
   void merge_chain_parts(int min_sep=0) {

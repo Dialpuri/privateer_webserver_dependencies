@@ -191,11 +191,13 @@ on symmetry-equivalent points::
 Python bindings provide the following specializations:
 
 .. doctest::
+  :skipif: numpy is None
 
   >>> grid.symmetrize_min()      # minimum of equivalent values
   >>> grid.symmetrize_max()      # maximum
-  >>> grid.symmetrize_abs_max()  # value corresponding to max(|x|)
-  >>> grid2.symmetrize_sum()     # sum symmetry-equivalent nodes
+  >>> grid.symmetrize_abs_max()  # max(|x|)
+  >>> grid.symmetrize_avg()      # average
+  >>> grid2.symmetrize_sum()     # sum (symmetry-equivalent nodes are added, multiplying nodes on special positions)
 
 .. _grid_cell:
 
@@ -301,6 +303,7 @@ Unlike array slicing, these functions are aware of the cell repeat
 (PBC) -- the block area is not limited by the unit cell boundaries.
 
 .. doctest::
+  :skipif: numpy is None
 
   >>> sub = gr.get_subarray(start=[3,3,3], shape=[2,3,4])
   >>> sub.shape
@@ -442,6 +445,7 @@ as in NumPy MaskedArray.
 The primary use for MaskedGrid is working with asymmetric unit (asu) only:
 
 .. doctest::
+  :skipif: numpy is None
 
   >>> asu = grid.masked_asu()
   >>> asu  # doctest: +ELLIPSIS
@@ -505,7 +509,7 @@ The parameters of SolventMasker can be inspected and changed:
   >>> masker.atomic_radii_set
   <AtomicRadiiSet.Cctbx: 1>
   >>> masker.rprobe
-  1.11
+  1.1
   >>> masker.rshrink
   0.9
   >>> masker.island_min_volume  # 0 = unused
@@ -586,6 +590,29 @@ with the model masked out. In this example we do the latter.
   >>> blobs[0].peak_pos
   <gemmi.Position(12.307, 0, 0)>
 
+In addition to the blob coordinates, it can be useful to know what is
+the nearest chain, residue and atom. Here is a quick recipe how to
+find it out with the help of :ref:`NeighborSearch <neighbor_search>`:
+
+.. doctest::
+
+  >>> pos = blobs[0].peak_pos
+  >>> ns = gemmi.NeighborSearch(st[0], st.cell, 8).populate(include_h=False)
+  >>> mark = ns.find_nearest_atom(pos)
+  >>> mark.to_cra(st[0])
+  <gemmi.CRA A/GLN 303/O>
+  >>> # To calculate distance from the atom, we need to account for the periodicity
+  >>> # of crystal. mark.pos is atom.pos transformed by a symmetry op, but we may need
+  >>> # to add a multiplicity of the unit cell vectors before calculating the distance.
+  >>> st.cell.find_nearest_pbc_image(pos, mark.pos, 0)
+  <gemmi.NearestImage 1_554 in distance 3.51>
+  >>> # You may also want to find a symmetry image of the blob that is near
+  >>> # the original molecule.
+  >>> atom_pos = mark.to_cra(st[0]).atom.pos
+  >>> st.cell.find_nearest_pbc_position(atom_pos, pos, mark.image_idx, inverse=True)
+  <gemmi.Position(12.8665, -2.3885, 0)>
+  >>> _.dist(atom_pos)
+  3.511341999194701
 
 Flood fill
 ----------
@@ -615,7 +642,7 @@ We could use multiple seeds to obtain a single mask for all blobs together.
 To find area with values below a certain value,
 run flood_fill_above() with optional argument ``negate=True``.
 
-Here are a few characteristics of the mask that we can easily show:
+Here we print a few characteristics of the mask:
 
 .. doctest::
 
@@ -641,22 +668,22 @@ both the Grid class and all the meta-data from the CCP4 file header.
 The CCP4 format has a few different modes that correspond to different
 data types. Gemmi supports:
 
-* mode 0 -- which correspond to the C++ type int8_t,
+* mode 0 -- which corresponds to the C++ type int8_t,
 * mode 1 -- corresponds to int16_t,
 * mode 2 -- float,
 * and mode 6 -- uint16_t.
 
-CCP4 programs use mode 2 (float) for the electron density,
-and mode 0 (int8_t) for masks. A mask is 0/1 data that marks part of the volume,
+CCP4 programs use mode 2 (float) for the electron density, and
+mode 0 (int8_t) for masks. A mask is 0/1 data that marks a part of the volume,
 such as the solvent region. Other modes are not used in crystallography,
 but may be used for CryoEM data.
 
 The CCP4 format is quite flexible. The data is stored as sections,
 rows and columns that correspond to a permutation of the X, Y and Z axes
 as defined in the file header.
-The file can contain only a part of the asymmetric unit,
-or more than an asymmetric unit (i.e. redundant data).
-There are two typical approaches to generate a crystallographic map:
+The file can contain only a part of the asymmetric unit
+or more than one asymmetric unit (i.e., redundant data).
+Typically, a span of the crystallographic map is one of the following:
 
 * Covering a molecule with some margin around it.
   This is necessary for programs such as PyMOL that don't know about symmetry.
@@ -674,6 +701,11 @@ as compared in the
 
 Nowadays, the CCP4 format is rarely used in crystallography.
 Almost all programs read the reflection data and calculate maps on the fly.
+
+The MRC variant of the format contains the ORIGIN header records (words 50-52)
+that specify the location (in Angstroms) of a subvolume taken
+from a larger volume. Gemmi functions ignore this header because our focus
+was on crystallographic applications. Using it is up for discussion.
 
 Reading
 -------

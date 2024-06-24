@@ -10,11 +10,11 @@
 #include "fail.hpp"  // for fail
 #include "util.hpp"  // for starts_with, to_lower, cat
 #include <cassert>
+#include <cstddef>   // for size_t
 #include <cstring>   // for memchr
 #include <algorithm> // for move, find_if, all_of, min, rotate
 #include <array>
 #include <initializer_list>
-#include <iosfwd>    // for size_t, ptrdiff_t
 #include <new>
 #include <stdexcept>
 #include <string>
@@ -183,7 +183,45 @@ struct Loop {
       std::rotate(dst, src, src+w);
   }
 
+  // column_names are not checked for duplicates nor for category name
+  void add_columns(const std::vector<std::string>& column_names,
+                   const std::string& value, int pos=-1) {
+    for (const std::string& name : column_names)
+      assert_tag(name);
+    size_t old_width = tags.size();
+    size_t len = length();
+    size_t upos = std::min((size_t)pos, old_width);
+    tags.insert(tags.begin() + upos, column_names.begin(), column_names.end());
+    vector_insert_columns(values, old_width, len, column_names.size(), upos, value);
+  }
+
+  void remove_column(const std::string& column_name) {
+    int n = find_tag(column_name);
+    if (n == -1)
+      fail("remove_column(): tag not found: " + column_name);
+    remove_column_at(n);
+  }
+
+  /// \pre: n < tags.size()
+  void remove_column_at(size_t n) {
+    tags.erase(tags.begin() + n);
+    vector_remove_column(values, tags.size(), n);
+  }
+
   void set_all_values(std::vector<std::vector<std::string>> columns);
+
+  std::string common_prefix() const {
+    if (tags.empty())
+      return {};
+    size_t len = tags[0].size();
+    for (auto it = tags.begin() + 1; it != tags.end(); ++it)
+      for (size_t n = 0; n != len; ++n)
+        if (!isame(tags[0][n], (*it)[n])) {
+          len = n;
+          break;
+        }
+    return tags[0].substr(0, len);
+  }
 };
 
 
@@ -230,6 +268,8 @@ public:
   const Item* item() const { return item_; }
   Item* item() { return item_; }
   size_t col() const { return col_; }
+
+  void erase();
 
 private:
   Item* item_;
@@ -411,12 +451,9 @@ struct Block {
   // access functions
   const Item* find_pair_item(const std::string& tag) const;
   const Pair* find_pair(const std::string& tag) const;
-  const std::string* find_value(const std::string& tag) const {
-    const Pair* pair = find_pair(tag);
-    return pair ? &(*pair)[1] : nullptr;
-  }
   Column find_loop(const std::string& tag);
   const Item* find_loop_item(const std::string& tag) const;
+  const std::string* find_value(const std::string& tag) const;
   Column find_values(const std::string& tag);
   bool has_tag(const std::string& tag) const {
     return const_cast<Block*>(this)->find_values(tag).item() != nullptr;
@@ -627,6 +664,13 @@ inline std::string* Column::get_tag() {
   return &item_->pair[0];
 }
 
+inline void Column::erase() {
+  if (Loop* loop = get_loop())
+    loop->remove_column_at(col_);
+  else if (item_)
+    item_->erase();
+}
+
 inline Loop* Column::get_loop() const {
   return item_ && item_->type == ItemType::Loop ? &item_->loop : nullptr;
 }
@@ -784,6 +828,20 @@ inline const Item* Block::find_loop_item(const std::string& tag) const {
   for (const Item& i : items)
     if (i.type == ItemType::Loop && i.loop.find_tag_lc(tag) != -1)
       return &i;
+  return nullptr;
+}
+
+inline const std::string* Block::find_value(const std::string& tag) const {
+  std::string lctag = gemmi::to_lower(tag);
+  for (const Item& i : items)
+    if (i.type == ItemType::Pair && gemmi::iequal(i.pair[0], lctag))
+      return &i.pair[1];
+  for (const Item& i : items)
+    if (i.type == ItemType::Loop) {
+      int pos = i.loop.find_tag_lc(lctag);
+      if (pos != -1 && i.loop.tags.size() == i.loop.values.size())
+        return &i.loop.values[pos];
+    }
   return nullptr;
 }
 

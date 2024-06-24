@@ -12,11 +12,37 @@ corresponding to a subcommand:
 .. literalinclude:: gemmi-help.txt
    :language: console
 
+Hint. To process multiple files in parallel, in multiple threads,
+use a tool such as `GNU parallel <https://www.gnu.org/software/parallel/>`_::
+
+  $ find $PDB_DIR/structures/divided/mmCIF/ -name '*.cif.gz' | parallel gemmi grep _exptl.method
+
 validate
 ========
 
 A CIF validator. Apart from checking the syntax it can check most of the rules
 imposed by DDL1 and DDL2 dictionaries.
+
+If you want to validate mmCIF files,
+the current version of the PDBx/mmCIF specification, maintained by the PDB,
+is distributed as one file
+(`mmcif_pdbx_v50.dic <https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Index/>`_),
+which can be used to validate all kinds of mmCIF files: coordinate files,
+reflection files, and CCD monomers.
+Note that such validation can spot only certain types of mistakes.
+It won't tell you if the file is appropriate for deposition to the PDB.
+Dictionary-based validation can't even tell if the file contains all
+the necessary tables; it is unaware of what the file represents --
+coordinates, reflection data or something else.
+On the other hand, the mmCIF files deposited to the PDB do not need
+to strictly conform to the PDBx/mmCIF spec.
+Not even the files distributed by the PDB are fully compliant
+(partly because not everything can be expressed in DDL2 syntax;
+usually it's about child-parent relationships;
+PDB's own validator, program CifCheck from
+`mmcif-dict-suite <https://sw-tools.rcsb.org/apps/MMCIF-DICT-SUITE/>`_,
+has a few exceptions hardcoded in C++,
+so that non-conformance is not accidental).
 
 .. literalinclude:: validate-help.txt
    :language: console
@@ -433,6 +459,15 @@ Merge intensities from multi-record reflection file.
 .. literalinclude:: merge-help.txt
    :language: console
 
+ecalc
+=====
+
+Calculates normalized amplitudes E from amplitudes F.
+Uses "Karle" approach, similar to CCP4 ECALC.
+
+.. literalinclude:: ecalc-help.txt
+   :language: console
+
 .. _sfcalc:
 
 sfcalc
@@ -554,6 +589,8 @@ Reindex reflections in MTZ file.
    :language: console
 
 
+.. _gemmi-residues:
+
 residues
 ========
 
@@ -568,6 +605,30 @@ Example::
   Model 3
   A   85  CYS: N CA C O CB SG H HA HB2 HB3 HG
   A  152  CSD: N CA CB SG C O OD1 OD2 HA HB2 HB3
+
+Note the options ``-s`` (short) that can be used up to 3 times,
+making the output more concise::
+
+  $ echo $PDB_DIR
+  $ gemmi residues -ss 1mru
+  /data/structures/divided/mmCIF/mr/1mru.cif.gz
+  A   polymer        THR PRO SER HIS LEU SER ASP ARG TYR GLU...  (269 residues)
+  B   polymer        MET THR THR PRO SER HIS LEU SER ASP ARG...  (271 residues)
+  A   non-polymers   MG  MG  AGS
+  B   non-polymers   MG  MG  AG
+
+Option ``-e`` lists so-called entities::
+
+  $ gemmi residues -e 3oov
+  /data/structures/divided/mmCIF/oo/3oov.cif.gz
+  Polymers
+    entity 1, polypeptide(L), length 169, subchains:
+      - A from strand A, 164 residues: 6-169
+      - B from strand B, 162 residues: 1-166 except 138-141
+  Others
+    entity 2, non-polymer (GOL), subchains: C D E F
+    entity 3, water (HOH), subchains: G H
+
 
 .. _gemmi-align:
 
@@ -607,17 +668,20 @@ Prints information about given space group.
 contents
 ========
 
-Analyses and summarizes content of a coordinate file.
-Inspired by CCP4 program ``rwcontents``.
+Analyzes and summarizes the content of a coordinate file.
+Inspired by the CCP4 program ``rwcontents``.
 
-By default, it prints atom count, estimated number of hydrogens in the protein,
-molecular weight of the protein, ASU volume, Matthews coefficient
+By default, it prints the atom count, estimated number of hydrogens in the protein,
+molecular weight of the protein, ASU volume, Matthews coefficient,
 and the fractional volume of solvent in the crystal.
 
 It has options to print other information -- see the help message below.
 
 .. literalinclude:: contents-help.txt
    :language: console
+
+To print a list of chains and residues, or entities,
+use :ref:`gemmi-residues`.
 
 .. _gemmi-contact:
 
@@ -889,4 +953,13 @@ even with only :ref:`a single chain in the asu <long_chain>`.
 TBC
 
 .. literalinclude:: wcn-help.txt
+   :language: console
+
+xds2mtz
+=======
+
+Converts XDS ASCII file to MTZ format.
+Optionally, filters the reflections and applies polarization correction.
+
+.. literalinclude:: xds2mtz-help.txt
    :language: console

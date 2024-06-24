@@ -152,8 +152,8 @@ We have usual methods expected in a matrix class:
   >>> mat33.determinant()
   1.0
   >>> mat33.inverse()
-  <gemmi.Mat33 [1, 0, -0]
-               [-0, 1, 5]
+  <gemmi.Mat33 [1, 0, 0]
+               [0, 1, 5]
                [0, 0, 1]>
 
 (and a few others that are not documented yet).
@@ -324,14 +324,14 @@ for switching between fractional and Cartesian coordinates:
     >>> cell.volume
     44720.2568
     >>> cell.frac.mat  # fractionalization matrix
-    <gemmi.Mat33 [0.0398089, -0, -0]
+    <gemmi.Mat33 [0.0398089, 0, 0]
                  [0, 0.0253165, 0]
                  [0, 0, 0.0221877]>
     >>> cell.fractionalize(gemmi.Position(10, 10, 10))
     <gemmi.Fractional(0.398089, 0.253165, 0.221877)>
     >>> cell.orth.mat  # orthogonalization matrix
     <gemmi.Mat33 [25.12, 0, 0]
-                 [0, 39.5, -0]
+                 [0, 39.5, 0]
                  [0, 0, 45.07]>
     >>> cell.orthogonalize(gemmi.Fractional(0.5, 0.5, 0.5))
     <gemmi.Position(12.56, 19.75, 22.535)>
@@ -348,6 +348,19 @@ that operates on Cartesian coordinates:
     <gemmi.Transform object at 0x...>
     >>> _.apply(gemmi.Position(0, 6, 2.1))
     <gemmi.Vec3(-1.17045, 25.75, 0)>
+
+In very rare cases,
+as described in :ref:`the section on coordinate frames <standard_frame>`,
+the fractionalization and orthogonalization transformations are not related
+to the unit cell parameters in the usual way. These cases are so rare that
+you probably do not need to worry about them. But they are the reason
+why the transformations also have a shift component (which is zero
+in the usual cases):
+
+.. doctest::
+
+    >>> cell.orth.vec
+    <gemmi.Vec3(0, 0, 0)>
 
 Cells can be compared with:
 

@@ -13,7 +13,7 @@
 #ifndef GEMMI_PDB_HPP_
 #define GEMMI_PDB_HPP_
 
-#include <algorithm>  // for swap
+#include <algorithm>  // for min, swap
 #include <cctype>     // for isalpha
 #include <cstdio>     // for stdin, size_t
 #include <cstdlib>    // for strtol
@@ -23,7 +23,7 @@
 #include "fileutil.hpp" // for path_basename, file_open
 #include "input.hpp"    // for FileStream
 #include "model.hpp"    // for Atom, Structure, ...
-#include "polyheur.hpp" // for assign_subchain_names
+#include "polyheur.hpp" // for assign_subchains
 #include "remarks.hpp"  // for read_metadata_from_remarks, read_int, ...
 
 namespace gemmi {
@@ -199,11 +199,17 @@ void process_conn(Structure& st, const std::vector<std::string>& conn_records) {
       if (record.length() < 22)
         continue;
       const char* r = record.c_str();
-      std::string cname = read_string(r + 14, 2);
-      ResidueId rid = read_res_id(r + 17, r + 11);
-      for (Model& model : st.models)
-        if (Residue* res = model.find_residue(cname, rid))
-          res->is_cis = true;
+      CisPep cispep;
+      cispep.partner_c.chain_name = read_string(r + 14, 2);
+      cispep.partner_c.res_id = read_res_id(r + 17, r + 11);
+      cispep.partner_n.chain_name = read_string(r + 28, 2);
+      cispep.partner_n.res_id = read_res_id(r + 31, r + 25);
+      // In files with a single model in the PDB CISPEP modNum is 0,
+      // but _struct_mon_prot_cis.pdbx_PDB_model_num is 1.
+      cispep.model_str = st.models.size() == 1 ? st.models[0].name
+                                               : read_string(r + 43, 3);
+      cispep.reported_angle = read_double(r + 53, 6);
+      st.cispeps.push_back(cispep);
     }
   }
 }
@@ -356,6 +362,9 @@ Structure read_pdb_from_stream(Stream&& stream, const std::string& source,
         if (st.assemblies.empty())
           continue;
         Assembly& assembly = st.assemblies.back();
+        auto r350_key = [&](int cpos, const char* text) {
+          return colon == line + cpos && starts_with(line+11, text);
+        };
         if (starts_with(line+11, "  BIOMT")) {
           if (read_matrix(matrix, line+13, len-13) == 3)
             if (!assembly.generators.empty()) {
@@ -365,23 +374,22 @@ Structure read_pdb_from_stream(Stream&& stream, const std::string& source,
               opers.back().transform = matrix;
               matrix.set_identity();
             }
-#define CHECK(cpos, text) (colon == line+(cpos) && starts_with(line+11, text))
-        } else if (CHECK(44, "AUTHOR DETERMINED")) {
+        } else if (r350_key(44, "AUTHOR DETERMINED")) {
           assembly.author_determined = true;
           assembly.oligomeric_details = read_string(line+45, 35);
-        } else if (CHECK(51, "SOFTWARE DETERMINED")) {
+        } else if (r350_key(51, "SOFTWARE DETERMINED")) {
           assembly.software_determined = true;
           assembly.oligomeric_details = read_string(line+52, 28);
-        } else if (CHECK(24, "SOFTWARE USED")) {
+        } else if (r350_key(24, "SOFTWARE USED")) {
           assembly.software_name = read_string(line+25, 55);
-        } else if (CHECK(36, "TOTAL BURIED SURFACE AREA")) {
+        } else if (r350_key(36, "TOTAL BURIED SURFACE AREA")) {
           assembly.absa = read_double(line+37, 12);
-        } else if (CHECK(38, "SURFACE AREA OF THE COMPLEX")) {
+        } else if (r350_key(38, "SURFACE AREA OF THE COMPLEX")) {
           assembly.ssa = read_double(line+39, 12);
-        } else if (CHECK(40, "CHANGE IN SOLVENT FREE ENERGY")) {
+        } else if (r350_key(40, "CHANGE IN SOLVENT FREE ENERGY")) {
           assembly.more = read_double(line+41, 12);
-        } else if (CHECK(40, "APPLY THE FOLLOWING TO CHAINS") ||
-                   CHECK(40, "                   AND CHAINS")) {
+        } else if (r350_key(40, "APPLY THE FOLLOWING TO CHAINS") ||
+                   r350_key(40, "                   AND CHAINS")) {
           if (line[11] == 'A') // first line - APPLY ...
             assembly.generators.emplace_back();
           else if (assembly.generators.empty())
@@ -389,11 +397,19 @@ Structure read_pdb_from_stream(Stream&& stream, const std::string& source,
           split_str_into_multi(read_string(line+41, 39), ", ",
                                assembly.generators.back().chains);
         }
-#undef CHECK
       }
 
     } else if (is_record_type(line, "CONECT")) {
-      // ignore for now
+      int serial = read_serial(line+6);
+      if (len >= 11 && serial != 0) {
+        std::vector<int>& bonded_atoms = st.conect_map[serial];
+        int limit = std::min(27, (int)len - 1);
+        for (int offset = 11; offset <= limit; offset += 5) {
+          int n = read_serial(line+offset);
+          if (n != 0)
+            bonded_atoms.push_back(n);
+        }
+      }
 
     } else if (is_record_type(line, "SEQRES")) {
       std::string chain_name = read_string(line+10, 2);
@@ -405,9 +421,31 @@ Structure read_pdb_from_stream(Stream&& stream, const std::string& source,
           ent.full_sequence.emplace_back(res_name);
       }
 
+    } else if (is_record_type(line, "MODRES")) {
+      ModRes modres;
+      modres.chain_name = read_string(line + 15, 2);
+      modres.res_id = read_res_id(line + 18, line + 12);
+      modres.parent_comp_id = read_string(line + 24, 3);
+      if (len >= 30)
+        // this field is named comment in PDB spec, but details in mmCIF
+        modres.details = read_string(line + 29, 41);
+      // Refmac's extension: 73-80 mod_id
+      // Check for spaces to make sure it's not an overflowed comment
+      if (len >= 73 && line[70] == ' ' && line[71] == ' ')
+        modres.mod_id = read_string(line + 72, 8);
+      st.mod_residues.push_back(modres);
+
+    } else if (is_record_type(line, "HETNAM")) {
+      if (len > 71 && line[70] == ' ') {
+        std::string full_code = read_string(line + 71, 8);
+        if (!full_code.empty())
+          st.shortened_ccd_codes.push_back({full_code, read_string(line + 11, 3)});
+      }
+
     } else if (is_record_type(line, "DBREF")) { // DBREF or DBREF1 or DBREF2
       std::string chain_name = read_string(line+11, 2);
       Entity& ent = impl::find_or_add(st.entities, chain_name);
+      ent.entity_type = EntityType::Polymer;
       if (line[5] == ' ' || line[5] == '1')
         ent.dbrefs.emplace_back();
       else if (ent.dbrefs.empty()) // DBREF2 without DBREF1?
@@ -515,17 +553,27 @@ Structure read_pdb_from_stream(Stream&& stream, const std::string& source,
       chain = nullptr;
 
     } else if (is_record_type3(line, "TER")) { // finishes polymer chains
-      // we don't expect more than one TER record in one chain
-      if (!chain || after_ter)
+      if (!chain || st.ter_status == 'e')
         continue;
+      st.ter_status = 'y';
       if (options.split_chain_on_ter) {
         chain = nullptr;
         // split_chain_on_ter is used for AMBER files that can have TER records
         // in various places. So in such case TER doesn't imply entity_type.
         continue;
       }
-      for (Residue& res : chain->residues)
+      // If we have 2+ TER records in one chain, they are used in non-standard
+      // way and should be better ignored (in all the chains).
+      if (after_ter) {
+        st.ter_status = 'e';  // all entity_types will be later set to Unknown
+        continue;
+      }
+      for (Residue& res : chain->residues) {
         res.entity_type = EntityType::Polymer;
+        // Sanity check: water should not be marked as a polymer.
+        if GEMMI_UNLIKELY(res.is_water())
+          st.ter_status = 'e';  // all entity_types will be later set to Unknown
+      }
       after_ter = true;
     } else if (is_record_type(line, "SCALEn")) {
       if (read_matrix(matrix, line, len) == 3) {
@@ -594,7 +642,10 @@ Structure read_pdb_from_stream(Stream&& stream, const std::string& source,
   if (st.models.empty())
     st.models.emplace_back("1");
 
-  // Here we assign Residue::subchain, but for chains with all
+  if (st.ter_status == 'e')
+    remove_entity_types(st);
+
+  // Here we assign Residue::subchain, but only for chains with all
   // Residue::entity_type assigned, i.e. for chains with TER.
   assign_subchains(st, /*force=*/false, /*fail_if_unknown=*/false);
 
@@ -612,6 +663,8 @@ Structure read_pdb_from_stream(Stream&& stream, const std::string& source,
 
   if (!options.skip_remarks)
     read_metadata_from_remarks(st);
+
+  restore_full_ccd_codes(st);
 
   return st;
 }

@@ -15,9 +15,9 @@
 // MIT License Notice
 //
 //    MIT License
-//    
+//
 //    Copyright (c) 2021 The fast_float authors
-//    
+//
 //    Permission is hereby granted, free of charge, to any
 //    person obtaining a copy of this software and associated
 //    documentation files (the "Software"), to deal in the
@@ -27,11 +27,11 @@
 //    the Software, and to permit persons to whom the Software
 //    is furnished to do so, subject to the following
 //    conditions:
-//    
+//
 //    The above copyright notice and this permission notice
 //    shall be included in all copies or substantial portions
 //    of the Software.
-//    
+//
 //    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
 //    ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
 //    TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
@@ -48,9 +48,9 @@
 //    Licensed under the Apache License, Version 2.0 (the "License");
 //    you may not use this file except in compliance with the License.
 //    You may obtain a copy of the License at
-//    
+//
 //    http://www.apache.org/licenses/LICENSE-2.0
-//    
+//
 //    Unless required by applicable law or agreed to in writing, software
 //    distributed under the License is distributed on an "AS IS" BASIS,
 //    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -117,7 +117,7 @@ template<typename T>
 from_chars_result from_chars_advanced(const char *first, const char *last,
                                       T &value, parse_options options)  noexcept;
 
-}
+} // namespace fast_float
 #endif // FASTFLOAT_FAST_FLOAT_H
 
 #ifndef FASTFLOAT_FLOAT_COMMON_H
@@ -136,7 +136,7 @@ from_chars_result from_chars_advanced(const char *first, const char *last,
        || (defined(__ppc64__) || defined(__PPC64__) || defined(__ppc64le__) || defined(__PPC64LE__)) )
 #define FASTFLOAT_64BIT 1
 #elif (defined(__i386) || defined(__i386__) || defined(_M_IX86)   \
-     || defined(__arm__) || defined(_M_ARM)                   \
+     || defined(__arm__) || defined(_M_ARM) || defined(__ppc__)   \
      || defined(__MINGW32__) || defined(__EMSCRIPTEN__))
 #define FASTFLOAT_32BIT 1
 #else
@@ -172,7 +172,11 @@ from_chars_result from_chars_advanced(const char *first, const char *last,
 #elif defined(sun) || defined(__sun)
 #include <sys/byteorder.h>
 #else
+#ifdef __has_include
+#if __has_include(<endian.h>)
 #include <endian.h>
+#endif //__has_include(<endian.h>)
+#endif //__has_include
 #endif
 #
 #ifndef __BYTE_ORDER__
@@ -199,12 +203,11 @@ from_chars_result from_chars_advanced(const char *first, const char *last,
 #endif
 
 #ifndef FASTFLOAT_ASSERT
-#define FASTFLOAT_ASSERT(x)  { if (!(x)) abort(); }
+#define FASTFLOAT_ASSERT(x)  { ((void)(x)); }
 #endif
 
 #ifndef FASTFLOAT_DEBUG_ASSERT
-#include <cassert>
-#define FASTFLOAT_DEBUG_ASSERT(x) assert(x)
+#define FASTFLOAT_DEBUG_ASSERT(x) { ((void)(x)); }
 #endif
 
 // rust style `try!()` macro, or `?` operator
@@ -340,8 +343,8 @@ constexpr static int32_t invalid_am_bias = -0x8000;
 constexpr static double powers_of_ten_double[] = {
     1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8,  1e9,  1e10, 1e11,
     1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22};
-constexpr static float powers_of_ten_float[] = {1e0, 1e1, 1e2, 1e3, 1e4, 1e5,
-                                                1e6, 1e7, 1e8, 1e9, 1e10};
+constexpr static float powers_of_ten_float[] = {1e0f, 1e1f, 1e2f, 1e3f, 1e4f, 1e5f,
+                                                1e6f, 1e7f, 1e8f, 1e9f, 1e10f};
 // used for max_mantissa_double and max_mantissa_float
 constexpr uint64_t constant_55555 = 5 * 5 * 5 * 5 * 5;
 // Largest integer value v so that (5**index * v) <= 1<<53.
@@ -571,6 +574,23 @@ fastfloat_really_inline void to_float(bool negative, adjusted_mantissa am, T &va
 #endif
 }
 
+#if FASTFLOAT_SKIP_WHITE_SPACE // disabled by default
+inline bool is_space(uint8_t c) {
+   static const bool table[] = {
+       0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+       0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+   return table[c];
+ }
+#endif
 } // namespace fast_float
 
 #endif
@@ -669,7 +689,11 @@ parsed_number_string parse_number_string(const char *p, const char *pend, parse_
   answer.valid = false;
   answer.too_many_digits = false;
   answer.negative = (*p == '-');
+#if FASTFLOAT_ALLOWS_LEADING_PLUS // disabled by default
+  if ((*p == '-') || (*p == '+')) {
+#else
   if (*p == '-') { // C++17 20.19.3.(7.1) explicitly forbids '+' sign here
+#endif
     ++p;
     if (p == pend) {
       return answer;
@@ -821,11 +845,11 @@ namespace fast_float {
  */
 
 /**
- * The smallest non-zero float (binary64) is 2^−1074.
+ * The smallest non-zero float (binary64) is 2^-1074.
  * We take as input numbers of the form w x 10^q where w < 2^64.
  * We have that w * 10^-343  <  2^(64-344) 5^-343 < 2^-1076.
  * However, we have that
- * (2^64-1) * 10^-342 =  (2^64-1) * 2^-342 * 5^-342 > 2^−1074.
+ * (2^64-1) * 10^-342 =  (2^64-1) * 2^-342 * 5^-342 > 2^-1074.
  * Thus it is possible for a number of the form w * 10^-342 where
  * w is a 64-bit value to be a non-zero floating-point number.
  *********
@@ -1498,7 +1522,7 @@ const uint64_t powers_template<unused>::power_of_five_128[number_of_entries] = {
         0x8e679c2f5e44ff8f,0x570f09eaa7ea7648,};
 using powers = powers_template<>;
 
-}
+} // namespace fast_float
 
 #endif
 
@@ -1550,9 +1574,9 @@ namespace detail {
  * where
  *   p = log(5**q)/log(2) = q * log(5)/log(2)
  *
- * For negative values of q in (-400,0), we have that 
+ * For negative values of q in (-400,0), we have that
  *  f = (((152170 + 65536) * q ) >> 16);
- * is equal to 
+ * is equal to
  *   -ceil(p) + q
  * where
  *   p = log(5**-q)/log(2) = -q * log(5)/log(2)
@@ -1619,16 +1643,11 @@ adjusted_mantissa compute_float(int64_t q, uint64_t w)  noexcept  {
   // 3. We might lose a bit due to the "upperbit" routine (result too small, requiring a shift)
 
   value128 product = compute_product_approximation<binary::mantissa_explicit_bits() + 3>(q, w);
-  if(product.low == 0xFFFFFFFFFFFFFFFF) { //  could guard it further
-    // In some very rare cases, this could happen, in which case we might need a more accurate
-    // computation that what we can provide cheaply. This is very, very unlikely.
-    //
-    const bool inside_safe_exponent = (q >= -27) && (q <= 55); // always good because 5**q <2**128 when q>=0, 
-    // and otherwise, for q<0, we have 5**-q<2**64 and the 128-bit reciprocal allows for exact computation.
-    if(!inside_safe_exponent) {
-      return compute_error_scaled<binary>(q, product.high, lz);
-    }
-  }
+  // The computed 'product' is always good enough.
+  // Mathematical proof:
+  // Noble Mushtak and Daniel Lemire, Fast Number Parsing Without Fallback (to appear)
+  // See script/mushtak_lemire.py
+
   // The "compute_product_approximation" function can be slightly slower than a branchless approach:
   // value128 product = compute_product(q, w);
   // but in practice, we can win big with the compute_product_approximation if its additional branch
@@ -2379,7 +2398,11 @@ parsed_number_string parse_number_string(const char *p, const char *pend, parse_
   answer.valid = false;
   answer.too_many_digits = false;
   answer.negative = (*p == '-');
+#if FASTFLOAT_ALLOWS_LEADING_PLUS // disabled by default
+  if ((*p == '-') || (*p == '+')) {
+#else
   if (*p == '-') { // C++17 20.19.3.(7.1) explicitly forbids '+' sign here
+#endif
     ++p;
     if (p == pend) {
       return answer;
@@ -2636,8 +2659,8 @@ void round_nearest_tie_even(adjusted_mantissa& am, int32_t shift, callback cb) n
     halfway = uint64_t(1) << (shift - 1);
   }
   uint64_t truncated_bits = am.mantissa & mask;
-  uint64_t is_above = truncated_bits > halfway;
-  uint64_t is_halfway = truncated_bits == halfway;
+  bool is_above = truncated_bits > halfway;
+  bool is_halfway = truncated_bits == halfway;
 
   // shift digits into position
   if (shift == 64) {
@@ -2982,6 +3005,10 @@ from_chars_result parse_infnan(const char *first, const char *last, T &value)  n
  * Credit : @mwalcott3
  */
 fastfloat_really_inline bool rounds_to_nearest() noexcept {
+  // See https://lemire.me/blog/2020/06/26/gcc-not-nearest/
+#if (FLT_EVAL_METHOD != 1) && (FLT_EVAL_METHOD != 0)
+  return false;
+#endif
   // See
   // A fast function to check your floating-point rounding mode
   // https://lemire.me/blog/2022/11/16/a-fast-function-to-check-your-floating-point-rounding-mode/
@@ -3015,7 +3042,25 @@ fastfloat_really_inline bool rounds_to_nearest() noexcept {
   //
   // Note: This may fail to be accurate if fast-math has been
   // enabled, as rounding conventions may not apply.
+  #if FASTFLOAT_VISUAL_STUDIO
+  #   pragma warning(push)
+  //  todo: is there a VS warning?
+  //  see https://stackoverflow.com/questions/46079446/is-there-a-warning-for-floating-point-equality-checking-in-visual-studio-2013
+  #elif defined(__clang__)
+  #   pragma clang diagnostic push
+  #   pragma clang diagnostic ignored "-Wfloat-equal"
+  #elif defined(__GNUC__)
+  #   pragma GCC diagnostic push
+  #   pragma GCC diagnostic ignored "-Wfloat-equal"
+  #endif
   return (fmini + 1.0f == 1.0f - fmini);
+  #if FASTFLOAT_VISUAL_STUDIO
+  #   pragma warning(pop)
+  #elif defined(__clang__)
+  #   pragma clang diagnostic pop
+  #elif defined(__GNUC__)
+  #   pragma GCC diagnostic pop
+  #endif
 }
 
 } // namespace detail
@@ -3034,6 +3079,11 @@ from_chars_result from_chars_advanced(const char *first, const char *last,
 
 
   from_chars_result answer;
+#if FASTFLOAT_SKIP_WHITE_SPACE  // disabled by default
+  while ((first != last) && fast_float::is_space(uint8_t(*first))) {
+    first++;
+  }
+#endif
   if (first == last) {
     answer.ec = std::errc::invalid_argument;
     answer.ptr = first;

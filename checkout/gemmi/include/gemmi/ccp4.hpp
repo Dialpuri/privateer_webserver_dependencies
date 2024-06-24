@@ -132,6 +132,11 @@ struct Ccp4Base {
       { header_float(35), header_float(36), header_float(37) }
     };
   }
+
+  // ORIGIN (words 50-52), used in MRC format, zeros in CCP4 format
+  Position get_origin() const {
+    return Position(header_float(50), header_float(51), header_float(52));
+  }
 };
 
 template<typename T=float>
@@ -194,7 +199,7 @@ struct Ccp4 : public Ccp4Base {
     if (mode < 0) {
       mode = mode_for_data();
       if (mode < 0)
-        fail("update_ccp4_header: specify map mode explicitely (usually 2)");
+        fail("update_ccp4_header: specify map mode explicitly (usually 2)");
     }
     set_header_i32(4, mode);
     set_header_float(20, (float) hstats.dmin);
@@ -223,9 +228,7 @@ struct Ccp4 : public Ccp4Base {
       // NXSTART et al. must be 0
       header_i32(5) == 0 && header_i32(6) == 0 && header_i32(7) == 0 &&
       // MX == NX
-      header_i32(8) == grid.nu && header_i32(9) == grid.nv && header_i32(10) == grid.nw &&
-      // just in case, check ORIGIN
-      header_i32(50) == 0 && header_i32(51) == 0 && header_i32(52) == 0;
+      header_i32(8) == grid.nu && header_i32(9) == grid.nv && header_i32(10) == grid.nw;
   }
 
   template<typename Stream>
@@ -238,7 +241,7 @@ struct Ccp4 : public Ccp4Base {
       fail("Not a CCP4 map: " + path);
     std::string machst = header_str(54, 4);
     if (machst[0] != 0x44 && machst[0] != 0x11)
-      fail("Unsupported machine stamp (endiannes) in the file?");
+      fail("Unsupported machine stamp (endianness) in the file?");
     same_byte_order = machst[0] == (is_little_endian() ? 0x44 : 0x11);
     grid.unit_cell.set(header_rfloat(11), header_rfloat(12), header_rfloat(13),
                        header_rfloat(14), header_rfloat(15), header_rfloat(16));

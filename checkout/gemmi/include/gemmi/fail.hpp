@@ -1,6 +1,6 @@
 // Copyright 2017 Global Phasing Ltd.
 //
-// fail() and unreachable()
+// fail(), unreachable() and __declspec/__attribute__ macros
 
 #ifndef GEMMI_FAIL_HPP_
 #define GEMMI_FAIL_HPP_
@@ -26,6 +26,31 @@
 # define GEMMI_COLD __declspec(noinline)
 #else
 # define GEMMI_COLD __attribute__((noinline))
+#endif
+
+#if __cplusplus >= 202002L || _MSVC_LANG >= 202002L
+#  define GEMMI_LIKELY(x) (x) [[likely]]
+#  define GEMMI_UNLIKELY(x) (x) [[unlikely]]
+#elif defined(__GNUC__) || defined(__clang__)
+#  define GEMMI_LIKELY(x) (__builtin_expect(!!(x), 1))
+#  define GEMMI_UNLIKELY(x) (__builtin_expect(!!(x), 0))
+#else
+#  define GEMMI_LIKELY(x) (x)
+#  define GEMMI_UNLIKELY(x) (x)
+#endif
+
+#if defined(_WIN32)
+# if defined(GEMMI_SHARED)
+#  if defined(GEMMI_BUILD)
+#   define GEMMI_DLL __declspec(dllexport)
+#  else
+#   define GEMMI_DLL __declspec(dllimport)
+#  endif  // GEMMI_BUILD
+# else
+#  define GEMMI_DLL
+# endif  // GEMMI_SHARED
+#else
+# define GEMMI_DLL __attribute__((visibility("default")))
 #endif
 
 namespace gemmi {

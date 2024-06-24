@@ -167,7 +167,7 @@ the following rules to relax the syntax:
   (such files were written by old versions of Refmac and SHELXL,
   and were also present in the CCP4 monomer library),
 * block name (*blockcode*) can be empty, i.e. the block can start
-  with bare ``data_`` keyword (RELION writes such files),
+  with bare ``data_`` keyword (RELION and buccaneer write such files),
 * unquoted strings cannot start with keywords (STAR spec is ambiguous
   about this -- see
   `StarTools doc <http://www.globalphasing.com/startools/>`_ for details;
@@ -352,11 +352,8 @@ And if the ``path`` above is ``-``, the standard input is read.
 If you use these functions in multiple compilation units, having
 the CIF parser implemented in headers makes the compilation time longer.
 To avoid it, include only ``<gemmi/read_cif.hpp>``
-and use functions declared there instead. In one compilation unit
-include this file after defining a macro that guards the implementation::
+and either link with libgemmi or add ``src/read_cif.cpp`` to your project.
 
-  #define GEMMI_READ_CIF_IMPLEMENTATION
-  #include <gemmi/read_cif.cpp>
 
 Python
 ------
@@ -410,24 +407,23 @@ sequence with ``Document.parse_string()`` doing the main job:
 Writing a file
 ==============
 
-One often wants to write a modified Document back to a file.
-That file will contain blocks separated with blank lines.
-It is also possible to write only a single block.
+Document (or a single Block) can be written to a file or to a string.
+Reading from a file and then writing to a file does not preserve whitespace.
+The formatting of the output file is controlled by ``cif::WriteOptions``,
+which contains the following fields (by default, they are all false or 0):
 
-Reading and writing a file does not preserve whitespaces.
-Instead, we have a few choices for "styling" of the output:
-
-* ``Style::Simple`` writes out the DOM structure adding blank lines between
-  mmCIF categories,
-* ``Style::NoBlankLines`` does not add blank lines,
-* ``Style::PreferPairs`` writes single-row loops as pairs,
-* ``Style::Pdbx`` additionally puts ``#`` (empty comments) between categories,
-  mimicking the peculiar formatting of PDBx/mmCIF files in the official
-  wwPDB archive. It enables diff-ing original and modified files with
-  option ``--ignore-space-change``.
-* ``Style::Indent35`` writes values from pairs from 35th column,
-* ``Style::Aligned`` left-align columns in loops, pairs as in Indent35.
-
+* ``prefer_pairs`` (bool) -- if set to true, write single-row loops as pairs,
+* ``compact`` (bool) -- if set to true, do not add blank lines between categories,
+* ``misuse_hash`` (bool) -- if set to true, put ``#`` (empty comments) between
+  categories -- the peculiar formatting used in the wwPDB archive;
+  enables diff-ing (``diff --ignore-space-change``) with other such files,
+* ``align_pairs`` (int) -- pad tags in tag-value pairs to this width
+  (if set to 33, the values will be aligned at column 35,
+  except where tags have more than 33 characters),
+* ``align_loops`` (int) -- if non-zero, columns in loops are aligned
+  to the maximum string width in each column, but not more than
+  this value; if one string in the column is very wide, that row will be
+  misaligned, which is usually preferable to excessive padding.
 
 C++
 ---
@@ -435,8 +431,8 @@ C++
 The functions writing ``cif::Document`` and ``cif::Block`` to C++ stream
 is in a separate header ``gemmi/to_cif.hpp``::
 
-  void write_cif_to_stream(std::ostream& os, const Document& doc, Style style)
-  void write_cif_block_to_stream(std::ostream& os, const Block& block, Style style)
+  void write_cif_to_stream(std::ostream& os, const Document& doc, WriteOption options)
+  void write_cif_block_to_stream(std::ostream& os, const Block& block, WriteOption options)
 
 Python
 ------
@@ -452,8 +448,10 @@ It can take the style as optional, second argument:
 
 .. doctest::
 
-  >>> doc.write_file('1pfe-modified.cif', cif.Style.PreferPairs)
-  >>> doc.write_file('1pfe-styled.cif', cif.Style.Pdbx)
+  >>> options = cif.WriteOptions()
+  >>> options.align_pairs = 33
+  >>> options.align_loops = 30
+  >>> doc.write_file('1pfe-aligned.cif', options)
 
 The ``Document`` class also has a method ``as_string()`` which returns
 the text that would be written by ``write_file()``.
@@ -556,6 +554,27 @@ Document has also one property
   'components.cif'
 
 
+.. warning::
+
+   Adding and removing blocks may invalidate references to other blocks
+   in the same Document. This is expected when working with a C++ vector,
+   but when using Gemmi from Python it is a flaw.
+   The same applies to functions that add/remove items in a block.
+   More precisely:
+
+   * functions that add items (e.g. ``add_new_block``) may cause memory
+     re-allocation invalidating references to all other items (blocks),
+   * functions that remove items (``__delitem__``) invalidate references to
+     all items after the removed one.
+
+   This means that you need to update a reference before using it:
+
+    .. code-block:: python
+
+       block = doc[0]
+       st.add_new_block(...)     # block gets invalidated
+       block = st[0]             # block is valid again
+
 Block
 =====
 
@@ -566,9 +585,12 @@ Each item is one of:
 * table, a.k.a loop (Loop)
 * or save frame (Block -- the same data structure as for block).
 
-(Although keyword ``global_`` and empty block name (``data_``) are
-not valid CIF, gemmi parses them as :ref:`exceptions <what_is_parsed>`
-and stores them as blocks with names, respectively, empty and ``#``.)
+A block headed by the word ``global_``, part of the STAR syntax, although
+`not allowed <https://onlinelibrary.wiley.com/iucr/itc/Ga/ch2o2v0001/sec2o2o7o1o9o5/>`_
+in CIF, is :ref:`parsed <what_is_parsed>` into a Block with empty name.
+
+A block headed by bare ``data_``, although not allowed neither in CIF nor
+in STAR, is parsed into a Block with name set to " " (the space character).
 
 C++
 ---
@@ -649,16 +671,20 @@ specific to either name-value pairs or to loops.
 
 .. warning::
 
-    Assuming what is a pair and what is in loop is a common source of bugs
-    when handling mmCIF files, so instead of these functions we recommend
-    using abstractions introduced in the next sections. For example,
-    when working with proteins one could assume that anisotropic ADP values
-    are in a loop, but wwPDB has entries with anisotropic ADP
-    for one atom only -- as name-value pairs.
-    On the other hand, one could think that R-free is always given as
-    name-value, but in entries from joint X-ray and neutron refinement
-    it is in a loop.
-    Be careful.
+    Assuming that a certain value is contained in a pair, or that it is
+    in a loop, is a common source of bugs when working with mmCIF files.
+    To get the data, instead of using the functions in this section,
+    it is recommended to use the abstractions (introduced in the next sections)
+    that work regardless of whether the values are in pairs or loops.
+
+    For instance, when working with proteins one could assume that anisotropic
+    ADP values are in a loop, but wwPDB also has entries with anisotropic ADP
+    for only one atom -- as name-value pairs.
+    Conversely, one could think that R-free is always given as
+    a name-value pair, but in entries from the joint X-ray and neutron
+    refinement it is in a loop.
+    Moreover, some CIF representations, such as mmJSON, do not preserve
+    the distinction between pairs and loops at all.
 
 The next sections introduce function that work with both pairs and loops.
 
@@ -677,8 +703,9 @@ or, if you want just the value::
 
   const std::string* Block::find_value(const std::string& tag) const
 
-Both functions return ``nullptr`` if the tag is not found (and they
-do not search in CIF loops).
+Both functions return ``nullptr`` if the tag is not found
+(but the latter also searches inside CIF loops and if there
+is a matching tag with only a single value, that value is returned).
 
 To add a pair to the block, or modify an existing one, use::
 
@@ -709,7 +736,10 @@ A new loop can be added using function::
   Loop& Block::init_loop(const std::string& prefix, std::vector<std::string> tags)
 
 Then it can be populated by either setting directly ``tags`` and ``values``,
-or my using Loop's methods such as ``add_row()`` or ``set_all_values()``.
+or by using Loop's methods such as ``add_row()`` or ``set_all_values()``.
+
+Loop has a few other methods for editing its content, such as
+``move_row()``, ``add_columns()`` and ``remove_column()``.
 
 Python
 ------
@@ -814,6 +844,17 @@ if necessary. If you have a list Python values use ``quote_list`` first:
   >>> cif.quote_list([None, False, 3, -2.5, 'word', 'two words'])
   ['?', '.', '3', '-2.5', 'word', "'two words'"]
 
+Columns can be added and removed:
+
+.. doctest::
+
+  >>> loop.add_columns(['_atom_type.description', '_atom_type.oxidation_number'], value='?')
+  >>> loop
+  <gemmi.cif.Loop 8 x 3>
+  >>> loop.remove_column('_atom_type.description')
+  >>> loop
+  <gemmi.cif.Loop 8 x 2>
+
 ``set_all_values`` sets all the data in a table. It takes as an argument
 a list of lists of string. The lists of strings correspond to columns.
 
@@ -899,7 +940,7 @@ The C++ signature of ``find_values`` is::
   // Returns underlying Item (which contains either Pair or Loop).
   Item* item();
 
-  // Returns pointer to the DOM structure containing the whole table.
+  // If it's in Loop, returns pointer to Loop; otherwise, nullptr.
   Loop* get_loop() const;
 
   // Get raw value (no bounds checking).
@@ -910,6 +951,9 @@ The C++ signature of ``find_values`` is::
 
   // Short-cut for cif::as_string(column.at(n)).
   std::string str(int n) const;
+
+  // Erases item for name-value pair; removes column for Loop
+  void erase();
 
 ``Column`` also provides support for C++11 range-based ``for``::
 
@@ -969,6 +1013,16 @@ to this ``Loop`` in the DOM. Otherwise it returns ``None``.
 
   >>> column.get_loop()
   <gemmi.cif.Loop 12 x 7>
+
+``erase()`` removes the column from a loop, if this column is in a loop;
+if it's a tag-value pair it erases the containing item.
+
+.. doctest::
+
+  >>> loop = column.get_loop()
+  >>> column.erase()
+  >>> loop  # one column less
+  <gemmi.cif.Loop 12 x 6>
 
 Table
 =====
@@ -1553,10 +1607,6 @@ Examples
 
 The examples here use C++11 or Python.
 Full working code code can be found in the examples__ directory.
-
-If you have the Python ``gemmi`` module installed you should also have
-the Python examples -- try ``python -m gemmi-examples`` if not sure
-where they are.
 
 The examples below can be run on one or more PDBx/mmCIF files.
 The ones that perform PDB-wide analysis are meant to be run on a

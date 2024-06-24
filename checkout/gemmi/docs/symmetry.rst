@@ -219,6 +219,8 @@ and a few methods:
   True
   >>> sg.is_centrosymmetric()     # does it have inversion?
   False
+  >>> sg.change_of_hand_op()      # how to change handedness?
+  <gemmi.Op("-x,-y,-z")>
   >>> sg.point_group_hm()         # H-M name of the point group
   '3'
   >>> sg.laue_str()               # name of the Laue class
@@ -255,7 +257,7 @@ Operations
 ==========
 
 Crystallographic symmetry operations have a few notations.
-Gemmi undertands only coordinate triplets (sometimes called
+Gemmi understands only coordinate triplets (sometimes called
 the Jones' faithful notation) such as ``x,x-y,z+1/2``.
 The symmetry operation is represented by class Op.
 It can be created in C++ as::
@@ -439,8 +441,10 @@ In particular, we can switch between enantiomorphic pairs using inversion:
 
 .. doctest::
 
-  >>> ops = gemmi.SpaceGroup('P 41').operations()
-  >>> ops.change_basis_forward(gemmi.Op('-x,-y,-z'))
+  >>> sg = gemmi.SpaceGroup('P 41')
+  >>> ops = sg.operations()
+  >>> # for enantiomorphic pairs the operator could be just -x,-y,-z
+  >>> ops.change_basis_forward(sg.change_of_hand_op())
   >>> gemmi.find_spacegroup_by_ops(ops)
   <gemmi.SpaceGroup("P 43")>
 

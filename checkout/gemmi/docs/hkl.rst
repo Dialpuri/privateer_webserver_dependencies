@@ -184,7 +184,7 @@ To get all columns of the specified type use:
 .. doctest::
 
   >>> mtz.columns_with_type('Q')
-  MtzColumnRefs[<gemmi.Mtz.Column SIGFP type Q>, <gemmi.Mtz.Column SIGI type Q>]
+  [<gemmi.Mtz.Column SIGFP type Q>, <gemmi.Mtz.Column SIGI type Q>]
 
 Different programs use different column names for the same thing.
 To access the column free set flags you may use function ``rfree_column``
@@ -321,10 +321,10 @@ but they can be accessed directly if needed:
 .. doctest::
   :skipif: mdm2_unmerged_mtz_path is None
 
-  >>> batch.ints
+  >>> list(batch.ints)
   [185, 29, 156, 0, -1, 1, -1, 0, 0, 0, 0, 0, 1, 0, 2, 1, 0, 1, 0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0]
-  >>> batch.floats[36:38]  # start and end of phi
-  [80.0, 80.5]
+  >>> batch.floats[36], batch.floats[37]  # start and end of phi
+  (80.0, 80.5)
 
 One peculiarity of the MTZ format is that instead of the original Miller
 indices it stores indices of the equivalent reflection in the ASU
@@ -523,40 +523,6 @@ To show that it really has an effect we print the appropriate
   >>> mtz.get_size_for_hkl()
   [10, 10, 20]
 
-A merged MTZ file uses one of the equivalent hkl indices
-for each reflection. The used hkl is usually the one from
-the reciprocal-space ASU. Both CCP4 and CCTBX use the same
-reciprocal-space ASU definitions. But if you'd have a different
-choice of hkls in the file, you may switch to the usual one with:
-
-.. doctest::
-
-  >>> mtz.ensure_asu()
-
-(You may also call ``mtz.ensure_asu(tnt=True)`` to use the ASU defined
-in the `TNT <https://www.uoxray.uoregon.edu/tnt/manual/node110.html>`_
-program, but it is unlikely that you will ever need it).
-
-To sort data rows by the *h,k,l* indices call ``Mtz::sort()``:
-
-.. doctest::
-
-  >>> mtz.sort()  # returns False iff the data was already sorted
-  False
-  >>> mtz.sort_order  # sort() always sorts by h,k,l and sets sort_order to:
-  [1, 2, 3, 0, 0]
-
-If you'd like to use the first 5 columns for sorting (for multirecord data),
-call ``mtz.sort(use_first=5)``.
-
-.. doctest::
-  :hide:
-
-  >>> mtz.sort(use_first=5)
-  False
-  >>> mtz.sort_order
-  [1, 2, 3, 4, 5]
-
 Columns can be removed with ``Mtz::remove_column(index)``,
 where index is 0-based column index:
 
@@ -715,15 +681,101 @@ You do not need to call ``update_reso()`` before writing an MTZ file --
 the values for the RESO record are re-calculated automatically when the file
 is written.
 
+
+.. _reindexing:
+
+Reindexing, ASU, sorting, ...
+-----------------------------
+
+The reindexing function changes:
+
+* Miller indices of reflections
+  (if new indices would be fractional the reflection is removed),
+* space group,
+* unit cell parameters (in MTZ records CELL and DCELL, and in batch headers).
+
+Reindexing takes as an argument the operator that is to be applied
+to Miller indices. In Python, it returns a textual message for the user:
+
+.. doctest::
+
+  >>> mtz.reindex(gemmi.Op('k,l,h'))
+  'Real space transformation: y,z,x\nSpace group changed from P 21 21 2 to P 21 2 21.\n'
+
+If reindex() is called on merged data,
+it should be followed by a call to ensure_asu().
+
+See also: :ref:`gemmi-reindex <gemmi-reindex>`.
+
+----
+
+A merged MTZ file can, in principle, use any of the equivalent hkl indices
+for each reflection, but it is preferable to always use,
+for a given space group, indices from the same reciprocal-space ASU.
+The choice of ASU is arbitrary, but fortunately both CCP4 and CCTBX use
+the same reciprocal-space ASU definitions. If you have different hkls in Mtz,
+you may switch to the usual ones with:
+
+.. doctest::
+
+  >>> mtz.ensure_asu()
+
+(You may also call ``mtz.ensure_asu(tnt=True)`` to use the ASU defined
+in the `TNT <https://www.uoxray.uoregon.edu/tnt/manual/node110.html>`_
+program, but it is unlikely that you will ever need it).
+
+When appropriate, changing hkl indices is also:
+
+* shifting phases (column type P),
+* changing phase probabilities -- Hendrickson-Lattman coefficients
+  (column type A),
+* swapping anomalous pairs, such as I(+)/I(-), F(+)/F(-) and E(+)/E(-),
+* changing the sign of anomalous differences (column type D).
+
+----
+
+To sort data rows by the *h,k,l* indices call ``Mtz::sort()``:
+
+.. doctest::
+
+  >>> mtz.sort()  # returns False iff the data was already sorted
+  False
+  >>> mtz.sort_order  # sort() always sorts by h,k,l and sets sort_order to:
+  [1, 2, 3, 0, 0]
+
+If you'd like to use the first 5 columns for sorting (for multirecord data),
+call ``mtz.sort(use_first=5)``.
+
+.. doctest::
+  :hide:
+
+  >>> mtz.sort(use_first=5)
+  False
+  >>> mtz.sort_order
+  [1, 2, 3, 4, 5]
+
+----
+
+"Sometimes you may want to reduce the symmetry of your space group and
+explicitly generate the symmetry related reflections. In most cases you will
+want to expand to P1 and generate data for a full hemisphere of reciprocal
+space." --- from documentation of the command EXPAND in Bart Hazes' SFTOOLS.
+
+Gemmi also has such a function:
+
+.. doctest::
+
+  >>> mtz.expand_to_p1()
+
+The reflections that are added may not be in the ASU and are not sorted.
+You may call ensure_asu() and sort() afterwards.
+
 Writing
 -------
 
 In C++, the MTZ file can be written to a file or to a memory buffer
 using one of the functions::
 
-  // In exactly one compilation unit define this before including one of
-  // mtz.hpp, to_mmcif.hpp, to_pdb.hpp.
-  #define GEMMI_WRITE_IMPLEMENTATION
   #include <gemmi/mtz.hpp>
 
   void Mtz::write_to_cstream(std::FILE* stream) const
@@ -739,39 +791,6 @@ In Python we have a single function for writing to a file:
 Here is a complete C++ example how to create a new MTZ file:
 
 .. literalinclude:: code/newmtz.cpp
-
-
-.. _reindexing:
-
-Reindexing
-----------
-
-Reindexing changes multiple things:
-
-* Miller indices of reflections
-  (if new indices would be fractional the reflection is removed),
-* space group,
-* unit cell parameters (in MTZ records CELL and DCELL, and in batch headers),
-* phases (column type P) can be shifted,
-* the same with phase probabilities -- Hendrickson-Lattman coefficients
-  (column type A) can be modified,
-* data in anomalous pairs, such as I(+)/I(-), F(+)/F(-) and E(+)/E(-),
-  can be swapped,
-* anomalous difference (column type D) can change the sign.
-
-Currently, gemmi provides a reindexing function that works only with Mtz
-objects. In C++, this function is in ``reindexing.hpp``.
-In Python, it is a method that returns a textual message for the user:
-
-.. doctest::
-
-  >>> mtz.reindex(gemmi.Op('k,l,h'))
-  'Real space transformation: z,x,y\nSpace group changed from P 21 21 2 to P 2 21 21.\n'
-
-**Current limitations:** H-L coefficients are not handled yet.
-In general, reindexing has not been tested enough. Bugs must be expected.
-
-See also: :ref:`gemmi-reindex <gemmi-reindex>`.
 
 SF mmCIF
 ========
@@ -986,16 +1005,17 @@ MtzToCif and CifToMtz. This code is used in gemmi command-line utilities
 The converters can use *spec files* for customization, see the command-line
 program documentation for details.
 
-CifToMtz has also Python bindings.
-
 .. doctest::
 
-  >>> conv = gemmi.CifToMtz()
-  >>> conv.spec_lines = ['pdbx_r_free_flag FREE I 0',
-  ...                    'F_meas_au FP F 1',
-  ...                    'F_meas_sigma_au SIGFP Q 1']
-  >>> conv.convert_block_to_mtz(rblock)
+  >>> cif2mtz = gemmi.CifToMtz()
+  >>> cif2mtz.spec_lines = ['pdbx_r_free_flag FREE I 0',
+  ...                       'F_meas_au FP F 1',
+  ...                       'F_meas_sigma_au SIGFP Q 1']
+  >>> cif2mtz.convert_block_to_mtz(rblock)
   <gemmi.Mtz with 6 columns, 406 reflections>
+  >>>
+  >>> # and convert it back
+  >>> cif_string = gemmi.MtzToCif().write_cif_to_string(_)
 
 
 SX hkl CIF
@@ -1175,15 +1195,13 @@ The boundaries are set by one of the setup functions:
   >>> mtz = gemmi.read_mtz_file('../tests/5wkd_phases.mtz.gz')
   >>> binner = gemmi.Binner()
   >>> binner.setup(4, gemmi.Binner.Method.Dstar3, mtz)
-  4
 
 The MTZ file may contain multiple datasets with different unit cells.
-In such case we may explicitely specify the unit cell:
+In such case we may explicitly specify the unit cell:
 
 .. doctest::
 
   >>> binner.setup(4, gemmi.Binner.Method.Dstar3, mtz, cell=mtz.get_cell(1))
-  4
 
 Alternatively, the binner can be set up with ReflnBlock or with an array
 of *hkl* or *d*:sup:`--2`:
@@ -1192,17 +1210,15 @@ of *hkl* or *d*:sup:`--2`:
   :skipif: numpy is None
 
   >>> binner.setup(4, gemmi.Binner.Method.Dstar3, rblock)
-  4
   >>> binner.setup(4, gemmi.Binner.Method.Dstar3,
   ...              mtz.make_miller_array(), mtz.get_cell())
-  4
   >>> binner.setup_from_1_d2(4, gemmi.Binner.Method.Dstar3,
   ...                        mtz.make_1_d2_array(), mtz.get_cell())
-  4
 
 The unit cell and the upper bin boundaries (in Å\ :sup:`--2`) are stored internally:
 
 .. doctest::
+  :skipif: numpy is None
 
   >>> binner.cell
   <gemmi.UnitCell(50.347, 4.777, 14.746, 90, 101.73, 90)>
@@ -1702,19 +1718,28 @@ used: one from the International Tables of Crystallography Vol. C
 Other parametrizations exist (for example, with only two Gaussians),
 but are not widely used.
 
-Currently, Gemmi includes only the ITC parametrization,
-ignoring charges of atoms. For example, the ITC provides separate form factors
-for Cu, Cu1+ and Cu2+, but we use only the first one.
-(If this is not sufficient for your needs, contact the developers).
+Currently, Gemmi includes only the ITC parametrization.
 
 In C++, the form factor coefficients are listed in the :file:`it92.hpp` header.
-In Python, they can be accessed as a property of an element (this may change).
+In Python, these coefficients can be accessed as a property of an element
+(only coefficients for neutral atoms):
 
 .. doctest::
 
   >>> gemmi.Element('Fe').it92  #doctest: +ELLIPSIS
   <gemmi.IT92Coef object at 0x...>
   >>> gemmi.Element('Es').it92  # -> None (no parametrization for Einsteinium)
+
+or by using the function IT92_get_exact() that takes an element and a charge
+as arguments and returns None if this exact atom or ion is absent in the table.
+This function is used solely to inspect the coefficients.
+When calculating structure factors, coefficients for ions absent in the table
+are substituted with coefficients of neutral atoms.
+
+.. doctest::
+
+  >>> gemmi.IT92_get_exact(gemmi.Element('Mg'), +2)  # for Mg2+ #doctest: +ELLIPSIS
+  <gemmi.IT92Coef object at 0x...>
 
 You can get the coefficients as numbers:
 
@@ -1728,7 +1753,7 @@ You can get the coefficients as numbers:
   >>> fe_coef.c
   1.0369
 
-For neutral atoms the *a*'s and *c* should sum up to *Z*,
+The *a*'s and *c* should sum up to the number of electrons (*Z* - *charge*),
 but the numbers from the Tables may differ slightly:
 
 .. doctest::
@@ -1752,7 +1777,7 @@ which means multiplying them by a factor between 0.99995 and 1.00113.
   [11.7738..., 7.3600..., 3.5235..., 2.30535...]
 
 Now let's use function ``set_coefs()`` to change the coefficients back
-to the original values:
+to the original values (for neutral atoms):
 
 .. doctest::
 
@@ -1772,9 +1797,10 @@ The coefficients can be used to directly calculate the sum of Gaussians --
 the structure factor contribution:
 
 .. doctest::
+  :skipif: numpy is None
 
   >>> fe_coef.calculate_sf(stol2=0.4)  # argument: (sin(theta)/lambda)^2
-  9.303602485040315
+  9.303603172302246
 
 The large number of reflections in macromolecular crystallography makes direct
 calculation of structure factors inefficient. Instead, we can calculate electron
@@ -1783,10 +1809,11 @@ In the simplest case, the atom's contribution to the electron density at a grid
 point can be calculated as:
 
 .. doctest::
+  :skipif: numpy is None
 
   >>> # arguments are distance^2 and isotropic ADP
   >>> fe_coef.calculate_density_iso(r2=2.3, B=50)
-  0.5279340932571192
+  0.5279340744018555
 
 The C++ interface provides more functions to calculate the electron density.
 We have separate functions to work with isotropic and anisotropic ADPs.
@@ -1887,9 +1914,9 @@ structure factors and density:
 .. doctest::
 
   >>> fe_coef.calculate_sf(stol2=0.4)  # argument: (sin(theta)/lambda)^2
-  0.9971508092073326
+  0.9971507787704468
   >>> fe_coef.calculate_density_iso(r2=2.3, B=50)
-  0.13794779230350634
+  0.13794779777526855
 
 Unlike for X-ray form factors, we do not add anomalous scattering here.
 
@@ -1948,10 +1975,10 @@ SpaceGroup because UnitCell already contains a list of symmetry operations).
 Now we can compute structure factors from Model for any (hkl):
 
 .. doctest::
-  :skipif: sys.platform == 'win32'
+  :skipif: sys.platform == 'win32' or numpy is None
 
   >>> calc_e.calculate_sf_from_model(st[0], (3,4,5))
-  (54.50873699946033+53.39498671218277j)
+  (54.50873522837474+53.39498672056236j)
 
 Similarly, for small molecules:
 
@@ -1962,7 +1989,7 @@ Similarly, for small molecules:
   >>> small.change_occupancies_to_crystallographic()
   >>> calc_x = gemmi.StructureFactorCalculatorX(small.cell)
   >>> calc_x.calculate_sf_from_small_structure(small, (0,2,4))
-  (17.814263474967163-6.544854223135837e-15j)
+  (17.849694728851315-6.557871454633539e-15j)
 
 For each atom, the Debye-Waller factor (used in the structure factor
 calculation) is obtained using either isotropic or anisotropic ADPs
@@ -2016,21 +2043,19 @@ well below 1ms.
 Structure factors calculated at this point incorporate the addends:
 
 .. doctest::
-  :skipif: sys.platform == 'win32'
 
-  >>> calc_x.calculate_sf_from_model(st[0], (3,4,5))
-  (182.36559664489897+269.0002625524421j)
+  >>> calc_x.calculate_sf_from_model(st[0], (3,4,5))  #doctest: +ELLIPSIS
+  (182.3655...+269.0002...j)
 
 Addends can also be employed to calculate the electron scattering
 from X-ray form factors, according to the Mott–Bethe formula:
 
 .. doctest::
-  :skipif: sys.platform == 'win32'
 
   >>> calc_x.addends.clear()
   >>> calc_x.addends.subtract_z()
-  >>> calc_x.mott_bethe_factor() * calc_x.calculate_sf_from_model(st[0], (3,4,5))
-  (54.0656580930728+52.96833236362286j)
+  >>> calc_x.mott_bethe_factor() * calc_x.calculate_sf_from_model(st[0], (3,4,5))  #doctest: +ELLIPSIS
+  (54.06570370099...+52.96838667006...j)
 
 The next section gives slightly more details on the Mott-Bethe formula.
 
@@ -2100,7 +2125,7 @@ into a structure factor grid:
   >>> sf_grid
   <gemmi.ReciprocalComplexGrid(48, 48, 50)>
   >>> sf_grid.get_value(3, 4, 5)
-  (54.52764892578125+53.418941497802734j)
+  (54.52766036987305+53.41892623901367j)
 
 In addition to ``d_min`` and ``rate``, which govern the grid density,
 DensityCalculator has two more parameters that affect accuracy
@@ -2143,7 +2168,7 @@ and *B*\ :sub:`min`):
 
   >>> dencalc.set_refmac_compatible_blur(st[0])
   >>> dencalc.blur
-  49.846486874188685
+  31.01648695048263
 
 The :ref:`sfcalc <sfcalc>` program can be used to test different choices
 of *B*\ :sub:`extra`.
@@ -2166,6 +2191,7 @@ we first employ addends to calculate *f*\ :sub:`x`\ --\ *Z*:
 
 .. doctest::
 
+  >>> gemmi.IT92_set_ignore_charge(True)  # ignoring charges on atoms
   >>> dc = gemmi.DensityCalculatorX()
   >>> dc.d_min = 2.5
   >>> dc.addends.subtract_z()
@@ -2183,7 +2209,7 @@ We either multiply individual values by ``mott_bethe_factor()``
 .. doctest::
 
   >>> dc.mott_bethe_factor([3,4,5]) * grid.get_value(3,4,5)
-  (54.064399348274954+52.96943978655508j)
+  (54.0637280809978+52.970120646098756j)
 
 or we call ``prepare_asu_data()`` with ``mott_bethe=True``:
 
@@ -2192,7 +2218,7 @@ or we call ``prepare_asu_data()`` with ``mott_bethe=True``:
 
   >>> asu_data = grid.prepare_asu_data(dmin=2.5, mott_bethe=True, unblur=dencalc.blur)
   >>> asu_data.value_array[numpy.all(asu_data.miller_array == [3,4,5], axis=1)]
-  array([54.064396+52.969437j], dtype=complex64)
+  array([54.06373+52.97012j], dtype=complex64)
 
 That is all.
 If you would like to separate positions of hydrogen nuclei

@@ -54,24 +54,14 @@ inline mmdb::Manager* copy_to_mmdb(const Structure& st, mmdb::Manager* manager) 
                                                        *res.seqid.num,
                                                        icode,
                                                        true);
-        if (res.is_cis) {
-          if (const Residue* next = chain.next_residue(res)) {
-            mmdb::CisPep* cispep = new mmdb::CisPep();
-            cispep->serNum = model2->GetCisPeps()->Length() + 1;
-            strcpy_to_mmdb(cispep->chainID1, chain.name);
-            strcpy_to_mmdb(cispep->pep1, res.name);
-            set_seqid_in_mmdb(&cispep->seqNum1, cispep->icode1, res.seqid);
-            strcpy_to_mmdb(cispep->chainID2, chain.name);
-            strcpy_to_mmdb(cispep->pep2, next->name);
-            set_seqid_in_mmdb(&cispep->seqNum2, cispep->icode2, next->seqid);
-            cispep->modNum = imodel;
-            model2->AddCisPep(cispep);
-          }
-        }
         for (const Atom& atom : res.atoms) {
           mmdb::PAtom atom2 = mmdb::newAtom();
           const char altloc[2] = {atom.altloc, '\0'};
-          atom2->SetAtomName(0, atom.serial, atom.padded_name().c_str(),
+          std::string padded_name = atom.padded_name();
+          // padded_name() is padding from the left; MMDB from both sides
+          if (padded_name.size() < 4)
+            padded_name.resize(4, ' ');
+          atom2->SetAtomName(0, atom.serial, padded_name.c_str(),
                              altloc, res.segment.c_str(), atom.element.uname());
           atom2->Het = res.het_flag == 'H';
           atom2->SetCharge(atom.charge);
@@ -100,6 +90,7 @@ inline mmdb::Manager* copy_to_mmdb(const Structure& st, mmdb::Manager* manager) 
       }
     }
     int n_model = manager->AddModel(model2);
+    // currently we don't setup CisPeps, so this doesn't do anything
     manager->GetModel(n_model)->CopyCisPeps(model2);
     manager->PutCell(st.cell.a, st.cell.b, st.cell.c,
                      st.cell.alpha, st.cell.beta, st.cell.gamma, 1);
@@ -216,6 +207,8 @@ inline Structure copy_from_mmdb(mmdb::Manager* manager) {
   Structure st;
   const mmdb::Cryst& cryst = *manager->GetCrystData();
   st.cell.set(cryst.a, cryst.b, cryst.c, cryst.alpha, cryst.beta, cryst.gamma);
+  if (cryst.WhatIsSet & mmdb::CSET_ZValue)
+    st.info.emplace("_cell.Z_PDB", std::to_string(cryst.Z));
   st.spacegroup_hm = cryst.spaceGroup;
   int n = manager->GetNumberOfModels();
   st.models.reserve(n);
@@ -263,7 +256,6 @@ int main (int argc, char** argv) {
 // Read a coordinate file using mmdb and write it to PDB using gemmi.
 #include <fstream>
 #include <gemmi/mmdb.hpp>
-#define GEMMI_WRITE_IMPLEMENTATION
 #include <gemmi/to_pdb.hpp>
 
 // two arguments expected: input and output paths.

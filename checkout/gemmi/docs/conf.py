@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
-import os
 
 # -- General configuration ------------------------------------------------
 
-needs_sphinx = '2.4.4'
+needs_sphinx = '5.3.0'
 
 extensions = ['sphinx.ext.doctest', 'sphinx.ext.githubpages']
 
@@ -14,7 +13,7 @@ source_suffix = '.rst'
 master_doc = 'index'
 
 project = u'Gemmi'
-copyright = u'2017-2022 Global Phasing Ltd'
+copyright = u'Global Phasing Ltd'
 author = u'Marcin Wojdyr'
 
 with open('../include/gemmi/version.hpp') as _f:
@@ -31,16 +30,8 @@ highlight_language = 'c++'
 
 # -- Options for HTML output ----------------------------------------------
 
-if not os.environ.get('READTHEDOCS'):
-    html_theme = 'sphinx_rtd_theme'
-    #import cloud_sptheme as csp
-    #html_theme = "cloud"
-    #html_theme_path = [csp.get_theme_dir()]
-    #html_theme = 'bizstyle'
-    # html_theme_options = {}
-
+html_theme = 'sphinx_rtd_theme'
 html_static_path = ['custom.css']
-
 
 # -- Options for LaTeX output ---------------------------------------------
 
@@ -60,29 +51,38 @@ latex_documents = [
 ]
 
 doctest_global_setup = '''
+import os
 import sys
 assert sys.version_info[0] > 2, "Tests in docs are for Python 3 only"
+disabled_features = []
 try:
     import numpy
 except ImportError:
-    print('Tests that use NumPy are disabled.', file=sys.stderr)
+    disabled_features.append('NumPy')
     numpy = None
 try:
     import pandas
 except ImportError:
-    print('Tests that use pandas are disabled.', file=sys.stderr)
+    disabled_features.append('pandas')
     pandas = None
 try:
     import networkx
 except ImportError:
-    print('Tests that use networkx are disabled.', file=sys.stderr)
+    disabled_features.append('networkx')
     networkx = None
-import os
+try:
+    import pynauty
+except ImportError:
+    disabled_features.append('pynauty')
+    pynauty = None
 mdm2_unmerged_mtz_path = os.getenv('CCP4')
 if mdm2_unmerged_mtz_path:
-    mdm2_unmerged_mtz_path += '/share/ccp4i2/demo_data/mdm2/mdm2_unmerged.mtz'
+    mdm2_unmerged_mtz_path += ('/lib/python3.7/site-packages/' +
+                               'ccp4i2/demo_data/mdm2/mdm2_unmerged.mtz')
     if not os.path.isfile(mdm2_unmerged_mtz_path):
         mdm2_unmerged_mtz_path = None
+if mdm2_unmerged_mtz_path is None:
+    disabled_features.append('$CCP4')
 '''
 
 def setup(app):

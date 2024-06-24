@@ -93,6 +93,7 @@ inline float refmac_radius_for_bulk_solvent(El el) {
   // temporary solution used in Refmac
   switch (el) {
     case El::H: return 1.4f;
+    case El::D: return 1.4f;
     case El::O: return 1.08f;
     case El::C: return 2.0f;
     case El::N: return 1.12f;
@@ -104,20 +105,31 @@ inline float refmac_radius_for_bulk_solvent(El el) {
 // mask utilities
 template<typename T>
 void mask_points_in_constant_radius(Grid<T>& mask, const Model& model,
-                                    double radius, T value) {
+                                    double radius, T value,
+                                    bool ignore_hydrogen,
+                                    bool ignore_zero_occupancy_atoms) {
   for (const Chain& chain : model.chains)
     for (const Residue& res : chain.residues)
-      for (const Atom& atom : res.atoms)
+      for (const Atom& atom : res.atoms) {
+        if ((ignore_hydrogen && atom.is_hydrogen()) ||
+            (ignore_zero_occupancy_atoms && atom.occ <= 0))
+          continue;
         mask.set_points_around(atom.pos, radius, value);
+      }
 }
 
 template<typename T>
 void mask_points_in_varied_radius(Grid<T>& mask, const Model& model,
                                   AtomicRadiiSet atomic_radii_set,
-                                  double r_probe, T value) {
+                                  double r_probe, T value,
+                                  bool ignore_hydrogen,
+                                  bool ignore_zero_occupancy_atoms) {
   for (const Chain& chain : model.chains)
     for (const Residue& res : chain.residues)
       for (const Atom& atom : res.atoms) {
+        if ((ignore_hydrogen && atom.is_hydrogen()) ||
+            (ignore_zero_occupancy_atoms && atom.occ <= 0))
+          continue;
         El elem = atom.element.elem;
         double r = 0;
         switch (atomic_radii_set) {
@@ -194,8 +206,9 @@ void set_margin_around(Grid<T>& mask, double r, T value, T margin_value) {
 }
 
 struct SolventMasker {
-  // parameters for used only in put_solvent_mask_on_grid()
-  AtomicRadiiSet atomic_radii_set = AtomicRadiiSet::VanDerWaals;
+  AtomicRadiiSet atomic_radii_set;
+  bool ignore_hydrogen;
+  bool ignore_zero_occupancy_atoms;
   double rprobe;
   double rshrink;
   double island_min_volume;
@@ -205,9 +218,12 @@ struct SolventMasker {
     set_radii(choice, constant_r_);
   }
 
+  // currently this function sets also parameters other than radii
   void set_radii(AtomicRadiiSet choice, double constant_r_=0.) {
     atomic_radii_set = choice;
     constant_r = constant_r_;
+    ignore_hydrogen = true;
+    ignore_zero_occupancy_atoms = true;
     switch (choice) {
       case AtomicRadiiSet::VanDerWaals:
         rprobe = 1.0;
@@ -215,7 +231,7 @@ struct SolventMasker {
         island_min_volume = 0.;
         break;
       case AtomicRadiiSet::Cctbx:
-        rprobe = 1.11;
+        rprobe = 1.1;
         rshrink = 0.9;
         island_min_volume = 0.;
         break;
@@ -236,9 +252,11 @@ struct SolventMasker {
 
   template<typename T> void mask_points(Grid<T>& grid, const Model& model) const {
     if (atomic_radii_set == AtomicRadiiSet::Constant)
-      mask_points_in_constant_radius(grid, model, constant_r + rprobe, (T)0);
+      mask_points_in_constant_radius(grid, model, constant_r + rprobe, (T)0,
+                                     ignore_hydrogen, ignore_zero_occupancy_atoms);
     else
-      mask_points_in_varied_radius(grid, model, atomic_radii_set, rprobe, (T)0);
+      mask_points_in_varied_radius(grid, model, atomic_radii_set, rprobe, (T)0,
+                                   ignore_hydrogen, ignore_zero_occupancy_atoms);
   }
 
   template<typename T> void symmetrize(Grid<T>& grid) const {
@@ -343,23 +361,24 @@ inline void mask_with_node_info(Grid<NodeInfo>& mask, const Model& model, double
   int du = (int) std::ceil(radius / mask.spacing[0]);
   int dv = (int) std::ceil(radius / mask.spacing[1]);
   int dw = (int) std::ceil(radius / mask.spacing[2]);
-  mask.template check_size_for_points_in_box<true>(du, dv, dw, true);
+  mask.template check_size_for_points_in_box<true>(du, dv, dw, false);
   for (const Chain& chain : model.chains)
     for (const Residue& res : chain.residues)
       for (const Atom& atom : res.atoms) {
         Fractional frac0 = mask.unit_cell.fractionalize(atom.pos);
-        mask.template do_use_points_in_box<true>(frac0, du, dv, dw,
-                      [&](NodeInfo& ni, const Position& delta, int u, int v, int w) {
-                        double d2 = delta.length_sq();
-                        if (d2 < ni.dist_sq) {
-                          ni.dist_sq = d2;
-                          ni.found = true;
-                          //ni.elem = atom.element;
-                          ni.u = u;
-                          ni.v = v;
-                          ni.w = w;
-                        }
-                      });
+        mask.template do_use_points_in_box<true>(
+            frac0, du, dv, dw,
+            [&](NodeInfo& ni, double d2, const Position&, int u, int v, int w) {
+              if (d2 < ni.dist_sq) {
+                ni.dist_sq = d2;
+                ni.found = true;
+                //ni.elem = atom.element;
+                ni.u = u;
+                ni.v = v;
+                ni.w = w;
+              }
+            },
+            radius);
       }
 }
 
@@ -423,14 +442,14 @@ void add_soft_edge_to_mask(Grid<T>& grid, double width) {
         if (grid.data[idx] >= 1e-3) continue;
         double min_d2 = width2 + 1;
         Fractional fctr = grid.get_fractional(u, v, w);
-        grid.template use_points_in_box<true>(fctr, du, dv, dw,
-                          [&](T& point, const Position& delta, int, int, int) {
-                            if (point > 0.999) {
-                              double d2 = delta.length_sq();
-                              if (d2 < min_d2)
-                                min_d2 = d2;
-                            }
-                          });
+        grid.template use_points_in_box<true>(
+            fctr, du, dv, dw,
+            [&](T& point, double d2, const Position&, int, int, int) {
+              if (point > 0.999) {
+                if (d2 < min_d2)
+                min_d2 = d2;
+              }
+            });
         if (min_d2 < width2)
           grid.data[idx] = T(0.5 + 0.5 * std::cos(pi() * std::sqrt(min_d2) / width));
       }

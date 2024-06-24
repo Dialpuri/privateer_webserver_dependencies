@@ -7,7 +7,6 @@
 #include <cassert>
 #include <cstdio>       // fseek, ftell, fread
 #include <climits>      // INT_MAX
-#include <memory>
 #include <string>
 #include <zlib.h>
 #include "fail.hpp"     // fail, sys_fail
@@ -37,8 +36,9 @@ inline size_t estimate_uncompressed_size(const std::string& path) {
   if (orig_size + 100 < gzipped_size || orig_size > 100 * gzipped_size) {
     // The size is stored as 32-bit number. If the original size exceeds 4GiB,
     // the stored number is modulo 4 GiB. So we just guess...
-    if (gzipped_size > 1073741824)
-      return 4294967295U + (sizeof(size_t) > 4 ? orig_size : 0);
+    constexpr size_t max_uint = 4294967295U;
+    if (gzipped_size > max_uint / 6)
+      return max_uint + (sizeof(size_t) > 4 ? orig_size : 0);
     fail("Cannot determine uncompressed size of " + path +
          "\nWould it be " + std::to_string(gzipped_size) + " -> " +
          std::to_string(orig_size) + " bytes?");
@@ -85,7 +85,7 @@ public:
   size_t gzread_checked(void* buf, size_t len) {
     size_t read_bytes = big_gzread(file_, buf, len);
     if (read_bytes != len && !gzeof(file_)) {
-      int errnum;
+      int errnum = 0;
       std::string err_str = gzerror(file_, &errnum);
       if (errnum == Z_ERRNO)
         sys_fail("failed to read " + path());

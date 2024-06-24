@@ -5,8 +5,6 @@
 #ifndef GEMMI_RECIPROC_HPP_
 #define GEMMI_RECIPROC_HPP_
 
-#include <array>
-#include "fail.hpp"      // for fail
 #include "symmetry.hpp"  // for SpaceGroup
 #include "unitcell.hpp"  // for UnitCell
 
@@ -19,7 +17,9 @@ void for_all_reflections(Func func,
                          double dmin, double dmax=0., bool unique=true) {
   Miller lim = cell.get_hkl_limits(dmin);
   double inv_dmin2 = 1. / sq(dmin);
-  double inv_dmax2 = dmax > 0 ? 1. / sq(dmax) : 0;
+  double inv_dmax2 = 0.;
+  if (dmax > 0)
+    inv_dmax2 = dmax == INFINITY ? -1 : 1. / sq(dmax);
   ReciprocalAsu asu(spacegroup);
   GroupOps gops = spacegroup->operations();
   Miller hkl;

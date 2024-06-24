@@ -5,9 +5,10 @@
 #ifndef GEMMI_UTIL_HPP_
 #define GEMMI_UTIL_HPP_
 
-#include <algorithm>  // for equal, find, remove_if
+#include <cassert>
 #include <cctype>     // for isspace
 #include <cstring>    // for strncmp
+#include <algorithm>  // for equal, find, remove_if
 #include <iterator>   // for begin, end, make_move_iterator
 #include <string>
 #include <vector>
@@ -72,18 +73,21 @@ inline std::string to_upper(std::string str) {
   return str;
 }
 
-// Case-insensitive comparisons. The second arg must be lowercase.
-
-inline bool iequal(const std::string& str, const std::string& low) {
-  return str.length() == low.length() &&
-         std::equal(std::begin(low), std::end(low), str.begin(),
-                    [](char c1, char c2) { return c1 == lower(c2); });
+// case-insensitive character comparison
+inline bool isame(char a, char b) {
+  return a == b || ((a^b) == 0x20 && (a|0x20) >= 'a' && (a|0x20) <= 'z');
 }
+
+// Case-insensitive comparisons. The second arg must be lowercase.
 
 inline bool iequal_from(const std::string& str, size_t offset, const std::string& low) {
   return str.length() == low.length() + offset &&
          std::equal(std::begin(low), std::end(low), str.begin() + offset,
                     [](char c1, char c2) { return c1 == lower(c2); });
+}
+
+inline bool iequal(const std::string& str, const std::string& low) {
+  return iequal_from(str, 0, low);
 }
 
 inline bool istarts_with(const std::string& str, const std::string& prefix) {
@@ -261,6 +265,36 @@ void vector_move_extend(std::vector<T>& dst, std::vector<T>&& src) {
 template <class T, typename F>
 void vector_remove_if(std::vector<T>& v, F&& condition) {
   v.erase(std::remove_if(v.begin(), v.end(), condition), v.end());
+}
+
+/// \par data - 2d array (old_width x length) in a vector
+/// Insert \par n new columns at position pos.
+template <class T>
+void vector_insert_columns(std::vector<T>& data, size_t old_width,
+                           size_t length, size_t n, size_t pos, T new_value) {
+  assert(data.size() == old_width * length);
+  assert(pos <= old_width);
+  data.resize(data.size() + n * length);
+  typename std::vector<T>::iterator dst = data.end();
+  for (size_t i = length; i-- != 0; ) {
+    for (size_t j = old_width; j-- != pos; )
+      *--dst = data[i * old_width + j];
+    for (size_t j = n; j-- != 0; )
+      *--dst = new_value;
+    for (size_t j = pos; j-- != 0; )
+      *--dst = data[i * old_width + j];
+  }
+  assert(dst == data.begin());
+}
+/// \par data - 2d array with new_width+1 columns, in a vector
+/// Remove column at position pos.
+template <class T>
+void vector_remove_column(std::vector<T>& data, size_t new_width, size_t pos) {
+  assert(pos <= new_width);
+  for (size_t source = pos + 1; source < data.size(); ++source)
+    for (size_t i = 0; i < new_width && source < data.size(); ++i)
+      data[pos++] = data[source++];
+  data.resize(pos);
 }
 
 

@@ -39,28 +39,37 @@ struct Restraints {
       return comp == o.comp ? atom < o.atom : comp < o.comp;
     }
 
-    Atom* get_from(Residue& res1, Residue* res2, char altloc) const {
-      Residue* residue = (comp == 1 || res2 == nullptr ? &res1 : res2);
-      Atom* a = residue->find_atom(atom, altloc);
+    // altloc2 is needed only in rare case when we have a link between
+    // atoms with different altloc (example: 2e7z).
+    Atom* get_from(Residue& res1, Residue* res2, char alt, char altloc2) const {
+      Residue* residue = &res1;
+      if (comp == 2 && res2 != nullptr) {
+        residue = res2;
+        if (altloc2 != '\0')
+          alt = altloc2;
+      }
+      Atom* a = residue->find_atom(atom, alt);
       // Special case: microheterogeneity may have shared atoms only in
       // the first residue. Example: in 1ejg N is shared between PRO and SER.
-      if (a == nullptr && altloc != '\0' && residue->group_idx > 0)
-        a = (residue - residue->group_idx)->find_atom(atom, altloc);
+      if (a == nullptr && alt != '\0' && residue->group_idx > 0)
+        a = (residue - residue->group_idx)->find_atom(atom, alt);
       return a;
     }
-    const Atom* get_from(const Residue& res1, const Residue* res2, char altloc) const {
-      return get_from(const_cast<Residue&>(res1), const_cast<Residue*>(res2), altloc);
+    const Atom* get_from(const Residue& res1, const Residue* res2,
+                         char alt, char alt2) const {
+      return get_from(const_cast<Residue&>(res1), const_cast<Residue*>(res2), alt, alt2);
     }
   };
 
   static std::string lexicographic_str(const std::string& name1,
                                        const std::string& name2) {
-    return name1 < name2 ? name1 + "-" + name2 : name2 + "-" + name1;
+    return name1 < name2 ? cat(name1, '-', name2) : cat(name2, '-', name1);
   }
 
   enum class DistanceOf { ElectronCloud, Nucleus };
 
   struct Bond {
+    static const char* what() { return "bond"; }
     AtomId id1, id2;
     BondType type;
     bool aromatic;
@@ -68,7 +77,7 @@ struct Restraints {
     double esd;
     double value_nucleus;
     double esd_nucleus;
-    std::string str() const { return id1.atom + "-" + id2.atom; }
+    std::string str() const { return cat(id1.atom, '-', id2.atom); }
     std::string lexicographic_str() const {
       return Restraints::lexicographic_str(id1.atom, id2.atom);
     }
@@ -83,27 +92,30 @@ struct Restraints {
   };
 
   struct Angle {
+    static const char* what() { return "angle"; }
     AtomId id1, id2, id3;
     double value;  // degrees
     double esd;
     double radians() const { return rad(value); }
     std::string str() const {
-      return id1.atom + "-" + id2.atom + "-" + id3.atom;
+      return cat(id1.atom, '-', id2.atom, '-', id3.atom);
     }
   };
 
   struct Torsion {
+    static const char* what() { return "torsion"; }
     std::string label;
     AtomId id1, id2, id3, id4;
     double value;
     double esd;
     int period;
     std::string str() const {
-      return id1.atom + "-" + id2.atom + "-" + id3.atom + "-" + id4.atom;
+      return cat(id1.atom, '-', id2.atom, '-', id3.atom, '-', id4.atom);
     }
   };
 
   struct Chirality {
+    static const char* what() { return "chirality"; }
     AtomId id_ctr, id1, id2, id3;
     ChiralityType sign;
 
@@ -112,11 +124,12 @@ struct Restraints {
              (sign == ChiralityType::Negative && volume > 0);
     }
     std::string str() const {
-      return id_ctr.atom + "," + id1.atom + "," + id2.atom + "," + id3.atom;
+      return cat(id_ctr.atom, ',', id1.atom, ',', id2.atom, ',', id3.atom);
     }
   };
 
   struct Plane {
+    static const char* what() { return "plane"; }
     std::string label;
     std::vector<AtomId> ids;
     double esd;
@@ -298,7 +311,7 @@ inline double chiral_abs_volume(double bond1, double bond2, double bond3,
     x -= cosine * cosine;
     y *= cosine;
   }
-  return mult * std::sqrt(x + y);
+  return mult * std::sqrt(std::max(0., x + y));
 }
 
 inline double Restraints::chiral_abs_volume(const Restraints::Chirality& ch) const {
@@ -328,12 +341,14 @@ struct ChemComp {
 
   struct Atom {
     std::string id;
+    std::string old_id;  // read from _chem_comp_atom.alt_atom_id
     Element el;
     // _chem_comp_atom.partial_charge can be non-integer,
     // _chem_comp_atom.charge is always integer (but sometimes has format
     //  '0.000' which is not correct but we ignore it).
     float charge;
     std::string chem_type;
+    Position xyz;
 
     bool is_hydrogen() const { return gemmi::is_hydrogen(el); }
   };
@@ -354,6 +369,7 @@ struct ChemComp {
   std::string name;
   std::string type_or_group;  // _chem_comp.type or _chem_comp.group
   Group group = Group::Null;
+  bool has_coordinates = false;
   std::vector<Atom> atoms;
   std::vector<Aliasing> aliases;
   Restraints rt;
@@ -417,7 +433,19 @@ struct ChemComp {
     return const_cast<ChemComp*>(this)->find_atom(atom_id);
   }
   bool has_atom(const std::string& atom_id) const {
-    return find_atom(atom_id) == atoms.end();
+    return find_atom(atom_id) != atoms.end();
+  }
+
+  std::vector<Atom>::iterator find_atom_by_old_name(const std::string& old_id) {
+    return std::find_if(atoms.begin(), atoms.end(),
+                        [&](const Atom& a) { return a.old_id == old_id; });
+  }
+  std::vector<Atom>::const_iterator find_atom_by_old_name(const std::string& old_id) const {
+    return const_cast<ChemComp*>(this)->find_atom_by_old_name(old_id);
+  }
+  bool has_old_names() const {
+    return std::any_of(atoms.begin(), atoms.end(),
+                       [&](const Atom& a) { return !a.old_id.empty() && a.old_id != a.id; });
   }
 
   int get_atom_index(const std::string& atom_id) const {
@@ -479,22 +507,19 @@ struct ChemComp {
 };
 
 inline BondType bond_type_from_string(const std::string& s) {
-  if (istarts_with(s, "sing"))
-    return BondType::Single;
-  if (istarts_with(s, "doub"))
-    return BondType::Double;
-  if (istarts_with(s, "trip"))
-    return BondType::Triple;
-  if (istarts_with(s, "arom"))
-    return BondType::Aromatic;
-  if (istarts_with(s, "metal"))
-    return BondType::Metal;
-  if (istarts_with(s, "delo") || s == "1.5")
-    return BondType::Deloc;
+  if (s.size() >= 3)
+    switch (ialpha4_id(s.c_str())) {
+      case ialpha4_id("sing"): return BondType::Single;
+      case ialpha4_id("doub"): return BondType::Double;
+      case ialpha4_id("trip"): return BondType::Triple;
+      case ialpha4_id("arom"): return BondType::Aromatic;
+      case ialpha4_id("meta"): return BondType::Metal;
+      case ialpha4_id("delo"): return BondType::Deloc;
+      case ialpha4_id("1.5"):  return BondType::Deloc; // rarely used
+      // program PDB2TNT produces a restraint file with bond type 'coval'
+      case ialpha4_id("cova"):  return BondType::Unspec;
+    }
   if (cif::is_null(s))
-    return BondType::Unspec;
-  // program PDB2TNT produces a restraint file with bond type 'coval'
-  if (s == "coval")
     return BondType::Unspec;
   throw std::out_of_range("Unexpected bond type: " + s);
 }
@@ -568,10 +593,13 @@ inline ChemComp make_chemcomp_from_block(const cif::Block& block_) {
     cc.type_or_group = type_col.str(0);
   for (auto row : block.find("_chem_comp_atom.",
                              {"atom_id", "type_symbol", "?type_energy",
-                             "?charge", "?partial_charge"}))
-    cc.atoms.push_back({row.str(0), Element(row.str(1)),
+                             "?charge", "?partial_charge", "?alt_atom_id"}))
+    cc.atoms.push_back({row.str(0),
+                        row.has(5) ? row.str(5) : "",
+                        Element(row.str(1)),
                         (float) cif::as_number(row.one_of(3, 4), 0.0),
-                        row.has(2) ? row.str(2) : ""});
+                        row.has(2) ? row.str(2) : "",
+                        Position()});
   for (auto row : block.find("_chem_comp_bond.",
                              {"atom_id_1", "atom_id_2",              // 0, 1
                               "?type", "?value_order",               // 2, 3

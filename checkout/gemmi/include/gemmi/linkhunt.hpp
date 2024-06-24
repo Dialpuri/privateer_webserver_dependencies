@@ -6,7 +6,6 @@
 #define GEMMI_LINKHUNT_HPP_
 
 #include <map>
-#include <unordered_map>
 #include "elem.hpp"
 #include "model.hpp"
 #include "monlib.hpp"
@@ -23,7 +22,7 @@ struct LinkHunt {
     CRA cra1;
     CRA cra2;
     bool same_image;
-    float bond_length = 0.f;
+    double bond_length = 0;
     Connection* conn = nullptr;
   };
 
@@ -104,7 +103,7 @@ struct LinkHunt {
     ContactSearch contacts((float) search_radius);
     contacts.ignore = ignore;
     contacts.for_each_contact(ns, [&](const CRA& cra1, const CRA& cra2,
-                                      int image_idx, float dist_sq) {
+                                      int image_idx, double dist_sq) {
         Match match;
 
         // search for a match in chem_links
@@ -133,7 +132,8 @@ struct LinkHunt {
             int link_score = link.calculate_score(
                     order1 ? *cra1.residue : *cra2.residue,
                     order1 ? cra2.residue : cra1.residue,
-                    cra1.atom->altloc_or(cra2.atom->altloc),
+                    order1 ? cra1.atom->altloc : cra2.atom->altloc,
+                    order1 ? cra2.atom->altloc : cra1.atom->altloc,
                     order1 ? aliasing1 : aliasing2,
                     order1 ? aliasing2 : aliasing1);
             match.chem_link_count++;
