@@ -49,6 +49,18 @@
 #include "../core/coords.h"
 #include "minimol_data.h"
 
+/* Using MSVC need __declspec */
+#if defined(__WIN32__) || defined(_WIN32)
+#  if defined(_MSC_VER) && defined(CLIPPER_MINIMOL_DLL_EXPORT)
+#    define CLIPPER_MINIMOL_DL_IMPORT(type) __declspec(dllexport) type
+#  elif defined(_MSC_VER)
+#    define CLIPPER_MINIMOL_DL_IMPORT(type) __declspec(dllimport) type
+#  else
+#    define CLIPPER_MINIMOL_DL_IMPORT(type) type
+#  endif
+#else
+#  define CLIPPER_MINIMOL_DL_IMPORT(type) type
+#endif
 
 namespace clipper {
 
@@ -87,11 +99,11 @@ namespace clipper {
 
    //! get atom ID, e.g. " N  ", " CA ", " CG1", " CA :A"
    const String& id() const { return id_; }
-   void set_id( const String& s );      //!< set atom ID
+   void set_id( const String& s, bool is_gemmi = false );      //!< set atom ID
 
    //! get atom name, i.e. the ID, omitting any alternate conformation code
    String name() const { return id_.substr(0,4); }
-   void set_name( const String s, const String altconf="" );  //!< set full id
+   void set_name( const String s, const String altconf="", bool is_gemmi = false );  //!< set full id
 
    //-- const String& element() const;  //!< get element e.g. H, C, Zn2+
    //-- const Coord_orth& coord_orth() const;      //!< get orth coordinate
@@ -110,7 +122,7 @@ namespace clipper {
    //! configureable copy function
    MAtom& copy( const MAtom& other, const MM::COPY& mode );
 
-   static String id_tidy( const String& id );  //!< convert ID to std format
+   static String id_tidy( const String& id, bool is_gemmi = false);  //!< convert ID to std format
    static bool id_match( const String& id1, const String& id2, const MM::MODE& mode );  //!< convert ID to std format
  private:
    String id_;
@@ -201,7 +213,7 @@ namespace clipper {
    typedef MAtom CHILDTYPE;
    std::vector<CHILDTYPE> children;
    String id_, type_;
-   static TYPE default_type_;
+   static CLIPPER_MINIMOL_DL_IMPORT(TYPE) default_type_;
    static int rotamer_find( String res, int rota, TYPE t );
  };
 
